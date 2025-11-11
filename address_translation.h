@@ -108,6 +108,9 @@
 #define Pcw2VdieTranslation(chNo, wayNo) ((chNo) + (wayNo) * (USER_CHANNELS))
 #define PlsbPage2VpageTranslation(pageNo) ((pageNo) > (0) ? ( ((pageNo) + 1) / 2): (0))
 
+#define AddrToBlock(addr) ((addr) / (SLICES_PER_BLOCK))
+#define AddrToOffset(addr) ((addr) % (SLICES_PER_BLOCK))
+
 //for logical to virtual translation
 typedef struct _LOGICAL_SLICE_ENTRY {
 	unsigned int virtualSliceAddr;
@@ -202,8 +205,9 @@ unsigned int GetFromFbList(unsigned int dieNo, unsigned int getFreeBlockOption);
 
 void UpdatePhyBlockMapForGrownBadBlock(unsigned int dieNo, unsigned int phyBlockNo);
 void UpdateBadBlockTableForGrownBadBlock(unsigned int tempBufAddr);
+unsigned int FindFreeVirtualBlock();
 
-
+void InvalidateOldVsaBlock(unsigned int logicalBlockAddr);
 extern P_LOGICAL_SLICE_MAP logicalSliceMapPtr;
 extern P_VIRTUAL_SLICE_MAP virtualSliceMapPtr;
 extern P_VIRTUAL_BLOCK_MAP virtualBlockMapPtr;
