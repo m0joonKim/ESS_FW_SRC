@@ -83,10 +83,13 @@
 #define IO_NVM_FLUSH										0x00
 #define IO_NVM_WRITE										0x01
 #define IO_NVM_READ											0x02
+/* === Block-Level FTL (ESS4116) === */
+#define IO_NVM_FTL_MAP											0x03
+/* ================================= */
 #define IO_NVM_WRITE_UNCORRECTABLE							0x04
 #define IO_NVM_COMPARE										0x05
 #define IO_NVM_DATASET_MANAGEMENT							0x09
-#define IO_NVM_HELLO										0x58
+
 /*Status Code Type */
 #define SCT_GENERIC_COMMAND_STATUS							0
 #define SCT_COMMAND_SPECIFIC_STATUS							1

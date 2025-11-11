@@ -115,19 +115,66 @@ void handle_nvme_io_write(unsigned int cmdSlotTag, NVME_IO_COMMAND *nvmeIOCmd)
 
 	ReqTransNvmeToSlice(cmdSlotTag, startLba[0] + (storageCapacity_L / USER_CHANNELS) * (nsid - 1), nlb, IO_NVM_WRITE);
 }
-void handle_nvme_io_hello(unsigned int cmdSlotTag, NVME_IO_COMMAND *nvmeIOCmd)
-{
-	NVME_COMPLETION nvmeCPL;
-	nvmeCPL.dword[0] = 0;
-	nvmeCPL.specific = 0x20201558;
-	xil_printf("Name: Myounjoon Kim\r\n");
-	xil_printf("Student ID: 20201558\r\n");
-	xil_printf("Affiliaion: Sogang University Computer Science and Enginerring\r\n");
-	xil_printf("Interests: Embedded Systems and Operating System\r\n");
-	xil_printf("Hobbies: Soccer, Movies\r\n");
-	set_auto_nvme_cpl(cmdSlotTag, nvmeCPL.specific, nvmeCPL.statusFieldWord);
 
+/* === Block-Level FTL (ESS4116) === */
+void handle_nvme_io_mapping_info()
+{
+	unsigned int validLogicalCnt = 0;
+	unsigned int validVirtualCnt = 0;
+
+	for (unsigned int i = 0; i < SLICES_PER_SSD; i++) {
+		if (logicalSliceMapPtr->logicalSlice[i].virtualSliceAddr != VSA_NONE)
+			validLogicalCnt++;
+
+		if (virtualSliceMapPtr->virtualSlice[i].logicalSliceAddr != LSA_NONE)
+			validVirtualCnt++;
+	}
+
+	unsigned int mappedBlockCnt = 0;
+	unsigned int totalLogicalBlocks = SLICES_PER_SSD / SLICES_PER_BLOCK;
+	static unsigned char seenBlock[USER_BLOCKS_PER_SSD] = {0};
+	memset(seenBlock, 0, sizeof(seenBlock));
+
+	for (unsigned int i = 0; i < SLICES_PER_SSD; i++) {
+		unsigned int vsa = logicalSliceMapPtr->logicalSlice[i].virtualSliceAddr;
+		if (vsa != VSA_NONE) {
+			unsigned int die = Vsa2VdieTranslation(vsa);
+			unsigned int blk = Vsa2VblockTranslation(vsa);
+			unsigned int globalBlkIdx = die * USER_BLOCKS_PER_DIE + blk;
+
+			if (!seenBlock[globalBlkIdx]) {
+				seenBlock[globalBlkIdx] = 1;
+				mappedBlockCnt++;
+			}
+		}
+	}
+
+	unsigned int freeBlkCnt = 0;
+	unsigned int invalidSum = 0;
+	unsigned int blockCnt = 0;
+
+	for (unsigned int d = 0; d < USER_DIES; d++) {
+		freeBlkCnt += virtualDieMapPtr->die[d].freeBlockCnt;
+		for (unsigned int b = 0; b < USER_BLOCKS_PER_DIE; b++) {
+			invalidSum += virtualBlockMapPtr->block[d][b].invalidSliceCnt;
+			blockCnt++;
+		}
+	}
+
+	xil_printf("-----------------------------------------------------\r\n");
+	xil_printf("[FTL] Mapping Table Summary\r\n");
+	xil_printf("-----------------------------------------------------\r\n");
+	xil_printf(" Valid logicalSliceMap entries : %u / %u\r\n", validLogicalCnt, SLICES_PER_SSD);
+	xil_printf(" Valid virtualSliceMap entries : %u / %u\r\n", validVirtualCnt, SLICES_PER_SSD);
+	xil_printf(" Unique mapped blocks          : %u / %u\r\n", mappedBlockCnt, totalLogicalBlocks);
+	xil_printf("-----------------------------------------------------\r\n");
+	xil_printf("[FTL] Space Utilization\r\n");
+	xil_printf("-----------------------------------------------------\r\n");
+	xil_printf(" Free blocks remaining         : %u\r\n", freeBlkCnt);
+	xil_printf("-----------------------------------------------------\r\n");
 }
+/* ================================= */
+
 void handle_nvme_io_cmd(NVME_COMMAND *nvmeCmd)
 {
 	NVME_IO_COMMAND *nvmeIOCmd;
@@ -166,12 +213,16 @@ void handle_nvme_io_cmd(NVME_COMMAND *nvmeCmd)
 			handle_nvme_io_read(nvmeCmd->cmdSlotTag, nvmeIOCmd);
 			break;
 		}
-		case IO_NVM_HELLO:
+		/* === Block-Level FTL (ESS4116) === */
+		case IO_NVM_FTL_MAP:
 		{
-			xil_printf("Custom Hello Command\r\n");
-			handle_nvme_io_hello(nvmeCmd->cmdSlotTag, nvmeIOCmd);
+			handle_nvme_io_mapping_info();
+			nvmeCPL.dword[0] = 0;
+			nvmeCPL.specific = 0x0;
+			set_auto_nvme_cpl(nvmeCmd->cmdSlotTag, nvmeCPL.specific, nvmeCPL.statusFieldWord);
 			break;
 		}
+		/* ================================= */
 		default:
 		{
 			xil_printf("Not Support IO Command OPC: %X\r\n", opc);
