@@ -58,6 +58,7 @@
 #include "host_lld.h"
 #include "nvme_io_cmd.h"
 
+#include "../address_translation.h"
 #include "../ftl_config.h"
 #include "../request_transform.h"
 
