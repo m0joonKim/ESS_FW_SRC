@@ -58,7 +58,7 @@ P_BAD_BLOCK_TABLE_INFO_MAP bbtInfoMapPtr;
 
 unsigned char sliceAllocationTargetDie;
 unsigned int mbPerbadBlockSpace;
-
+unsigned int vBlock_i;
 
 void InitAddressMap()
 {
@@ -629,16 +629,18 @@ unsigned int AddrTransRead(unsigned int logicalSliceAddr)
 	unsigned int virtualBlockBase, block, offset, blockBase;
 	block = AddrToBlock(logicalSliceAddr);
 	offset = AddrToOffset(logicalSliceAddr);
-	blockBase = block * SLICES_PER_BLOCK;
+	blockBase = BlockToBlockBase(block);
 
 	if(logicalSliceAddr < SLICES_PER_SSD)
 	{
-		virtualBlockBase = logicalSliceMapPtr->logicalSlice[blockBase].virtualSliceAddr;
-		xil_printf("VSA read : LSA %d -> VSA %d \r\n", logicalSliceAddr, virtualBlockBase + offset);
-		if(virtualBlockBase != VSA_NONE)
-			return virtualBlockBase + offset;
-		else
+		virtualBlockBase = logicalSliceMapPtr->logicalSlice[block].virtualSliceAddr;
+		if(virtualBlockBase != VSA_NONE){
+			xil_printf("VSA read : LSA %d -> VSA %d \r\n", logicalSliceAddr, virtualBlockBase);
+			return virtualBlockBase;
+		}else{
+			xil_printf("VSA read fail : LSA %d has no mapped VSA\r\n", logicalSliceAddr);
 			return VSA_FAIL;
+		}
 	}
 	else
 		assert(!"[WARNING] Logical address is larger than maximum logical address served by SSD [WARNING]");
@@ -646,24 +648,19 @@ unsigned int AddrTransRead(unsigned int logicalSliceAddr)
 
 unsigned int AddrTransWrite(unsigned int logicalSliceAddr)
 {
-	unsigned int vBlock, vBlockBase, block, offset, blockBase;
+	unsigned int vSlice, vBlock, vBlockBase, block, offset, blockBase;
 	block = AddrToBlock(logicalSliceAddr);
 	offset = AddrToOffset(logicalSliceAddr);
-	blockBase = block * SLICES_PER_BLOCK;
+	blockBase = BlockToBlockBase(block);
 	xil_printf("AddrTransWrite called for LSA %d\r\n", logicalSliceAddr);
 	xil_printf("	block %d, offset %d, blockBase %d\r\n", block, offset, blockBase);
 	if(logicalSliceAddr < SLICES_PER_SSD)
 	{
-		xil_printf("VSA write request : LSA %d \r\n", logicalSliceAddr);
-		// InvalidateOldVsaBlock(block);
-		InvalidateOldVsa(blockBase);
-
-		vBlock = FindFreeVirtualSlice()/SLICES_PER_BLOCK;
-		vBlockBase = vBlock * SLICES_PER_BLOCK;
-		xil_printf("Allocated VSA block: %d for LSA block: %d\r\n", vBlock, block);
-		logicalSliceMapPtr->logicalSlice[blockBase].virtualSliceAddr = vBlockBase;
-		virtualSliceMapPtr->virtualSlice[vBlockBase].logicalSliceAddr = blockBase;
-		return vBlockBase + offset;
+		InvalidateOldVsa(logicalSliceAddr);
+		vSlice = FindFreeVirtualSlice();
+		logicalSliceMapPtr->logicalSlice[block].virtualSliceAddr = vSlice;
+		virtualSliceMapPtr->virtualSlice[vSlice].logicalSliceAddr = block;
+		return vSlice;
 	}
 	else
 		assert(!"[WARNING] Logical address is larger than maximum logical address served by SSD [WARNING]");

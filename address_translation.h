@@ -110,6 +110,7 @@
 
 #define AddrToBlock(addr) ((addr) / (SLICES_PER_BLOCK))
 #define AddrToOffset(addr) ((addr) % (SLICES_PER_BLOCK))
+#define BlockToBlockBase(block) ((block) * (SLICES_PER_BLOCK))
 
 //for logical to virtual translation
 typedef struct _LOGICAL_SLICE_ENTRY {
