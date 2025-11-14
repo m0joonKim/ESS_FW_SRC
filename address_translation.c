@@ -60,6 +60,9 @@ unsigned char sliceAllocationTargetDie;
 unsigned int mbPerbadBlockSpace;
 unsigned int vBlock_i;
 
+static unsigned int logicalBlockBaseVsa[LOGICAL_BLOCKS_PER_SSD];
+static unsigned short logicalBlockNextOffset[LOGICAL_BLOCKS_PER_SSD];
+
 void InitAddressMap()
 {
 	unsigned int blockNo, dieNo;
@@ -94,6 +97,12 @@ void InitSliceMap()
 	{
 		logicalSliceMapPtr->logicalSlice[sliceAddr].virtualSliceAddr = VSA_NONE;
 		virtualSliceMapPtr->virtualSlice[sliceAddr].logicalSliceAddr = LSA_NONE;
+	}
+
+	for(sliceAddr=0; sliceAddr<LOGICAL_BLOCKS_PER_SSD; sliceAddr++)
+	{
+		logicalBlockBaseVsa[sliceAddr] = VSA_NONE;
+		logicalBlockNextOffset[sliceAddr] = 0;
 	}
 }
 
@@ -626,17 +635,14 @@ void InitBlockDieMap()
 
 unsigned int AddrTransRead(unsigned int logicalSliceAddr)
 {
-	unsigned int virtualBlockBase, block, offset, blockBase;
-	block = AddrToBlock(logicalSliceAddr);
-	offset = AddrToOffset(logicalSliceAddr);
-	blockBase = BlockToBlockBase(block);
+	unsigned int vSlice;
 
 	if(logicalSliceAddr < SLICES_PER_SSD)
 	{
-		virtualBlockBase = logicalSliceMapPtr->logicalSlice[block].virtualSliceAddr;
-		if(virtualBlockBase != VSA_NONE){
-			xil_printf("VSA read : LSA %d -> VSA %d \r\n", logicalSliceAddr, virtualBlockBase);
-			return virtualBlockBase+offset;
+		vSlice = logicalSliceMapPtr->logicalSlice[logicalSliceAddr].virtualSliceAddr;
+		if(vSlice != VSA_NONE){
+			xil_printf("VSA read : LSA %d -> VSA %d \r\n", logicalSliceAddr, vSlice);
+			return vSlice;
 		}else{
 			xil_printf("VSA read fail : LSA %d has no mapped VSA\r\n", logicalSliceAddr);
 			return VSA_FAIL;
@@ -648,32 +654,54 @@ unsigned int AddrTransRead(unsigned int logicalSliceAddr)
 
 unsigned int AddrTransWrite(unsigned int logicalSliceAddr)
 {
-	unsigned int vSlice, vBlock, vBlockBase, block, offset, blockBase;
-	block = AddrToBlock(logicalSliceAddr);
-	offset = AddrToOffset(logicalSliceAddr);
-	blockBase = BlockToBlockBase(block);
-	xil_printf("AddrTransWrite called for LSA %d\r\n", logicalSliceAddr);
-	xil_printf("	block %d, offset %d, blockBase %d\r\n", block, offset, blockBase);
-	if(logicalSliceAddr < SLICES_PER_SSD)
-	{
-		// InvalidateOldVsa(logicalSliceAddr);
-		vBlockBase = logicalSliceMapPtr->logicalSlice[block].virtualSliceAddr;
-		if(vBlockBase != VSA_NONE){
-		//blcok과 이미 mapping된 vBlock있다면
-			xil_printf("VSA write existing : LSA %d -> VSA %d \r\n", logicalSliceAddr, vBlockBase + offset);
-			vSlice = vBlockBase + offset;
-			return vSlice;
-		}else{//아직 없다면.
-			vBockBase = FindFreeVirtualBlock();
-			vBlock = AddrToBlock(vBockBase);
-			vSlice = vBockBase + offset;
-			logicalSliceMapPtr->logicalSlice[block].virtualSliceAddr = vBlockBase;
-			virtualSliceMapPtr->virtualSlice[vBlock].logicalSliceAddr = blockBase;
-			return vSlice
-		}
-	}
-	else
+	unsigned int block, vSlice;
+
+	if(logicalSliceAddr >= SLICES_PER_SSD)
 		assert(!"[WARNING] Logical address is larger than maximum logical address served by SSD [WARNING]");
+
+	block = AddrToBlock(logicalSliceAddr);
+
+	vSlice = logicalSliceMapPtr->logicalSlice[logicalSliceAddr].virtualSliceAddr;
+	if(vSlice != VSA_NONE)
+	{
+		assert(virtualSliceMapPtr->virtualSlice[vSlice].logicalSliceAddr == logicalSliceAddr);
+		xil_printf("VSA write existing : LSA %d -> VSA %d \r\n", logicalSliceAddr, vSlice);
+		return vSlice;
+	}
+
+	if(logicalBlockBaseVsa[block] == VSA_NONE)
+	{
+		logicalBlockBaseVsa[block] = FindFreeVirtualBlock();
+		logicalBlockNextOffset[block] = 0;
+		xil_printf("New block allocated for logical block %d : base VSA %d\r\n", block, logicalBlockBaseVsa[block]);
+	}else if(logicalBlockNextOffset[block] != 0 &&
+        logicalBlockNextOffset[block] < SLICES_PER_BLOCK)
+	{
+		xil_printf("[BlkAlloc][WARN] logical block %d re-opened while %d/%d slices remained mapped\r\n",
+				block, logicalBlockNextOffset[block], SLICES_PER_BLOCK);
+		InvalidateOldVsaBlock(block);
+		logicalBlockBaseVsa[block] = FindFreeVirtualBlock();
+		logicalBlockNextOffset[block] = 0;
+	}
+	
+
+	if(logicalBlockNextOffset[block] >= SLICES_PER_BLOCK)
+		assert(!"[WARNING] Logical block already fully populated [WARNING]");
+
+	vSlice = logicalBlockBaseVsa[block] + logicalBlockNextOffset[block];
+	logicalBlockNextOffset[block]++;
+
+	logicalSliceMapPtr->logicalSlice[logicalSliceAddr].virtualSliceAddr = vSlice;
+	virtualSliceMapPtr->virtualSlice[vSlice].logicalSliceAddr = logicalSliceAddr;
+
+	xil_printf("VSA write new : LSA %d -> VSA %d (logical block %d, slot %d)\r\n",
+			logicalSliceAddr, vSlice, block, logicalBlockNextOffset[block] - 1);
+
+	if(logicalBlockNextOffset[block] == SLICES_PER_BLOCK)
+		xil_printf("[BlkAlloc] logical block %d fully populated (base VSA %d)\r\n",
+				block, logicalBlockBaseVsa[block]);
+
+	return vSlice;
 }
 
 
@@ -681,6 +709,8 @@ unsigned int FindFreeVirtualBlock(){
 	unsigned int dieNo, currentBlock, baseVsa;
 	dieNo = sliceAllocationTargetDie;
 	currentBlock = virtualDieMapPtr->die[dieNo].currentBlock;
+	assert(currentBlock != BLOCK_FAIL);
+	assert(virtualBlockMapPtr->block[dieNo][currentBlock].currentPage <= USER_PAGES_PER_BLOCK);
 	while(virtualBlockMapPtr->block[dieNo][currentBlock].currentPage != 0)
 	{
 		currentBlock = GetFromFbList(dieNo, GET_FREE_BLOCK_NORMAL);
@@ -691,13 +721,18 @@ unsigned int FindFreeVirtualBlock(){
 		}
 		else
 		{
+			xil_printf("[BlkAlloc] free block short on die %d, triggering GC\r\n", dieNo);
 			GarbageCollection(dieNo);
 			currentBlock = virtualDieMapPtr->die[dieNo].currentBlock;
+			assert(currentBlock != BLOCK_FAIL);
 		}
+		assert(virtualBlockMapPtr->block[dieNo][currentBlock].currentPage <= USER_PAGES_PER_BLOCK);
 	}
 	baseVsa = Vorg2VsaTranslation(dieNo, currentBlock, 0);
 	virtualBlockMapPtr->block[dieNo][currentBlock].currentPage = USER_PAGES_PER_BLOCK;
 	sliceAllocationTargetDie = FindDieForFreeSliceAllocation();
+	xil_printf("[BlkAlloc] die %d block %d reserved for block-level write (VSA %d)\r\n",
+			dieNo, currentBlock, baseVsa);
 	return baseVsa;
 }
 
@@ -803,6 +838,12 @@ void InvalidateOldVsaBlock(unsigned int logicalBlockAddr)
 	{
 		logicalSliceAddr = logicalBlockAddr * SLICES_PER_BLOCK + offset;
 		InvalidateOldVsa(logicalSliceAddr);
+	}
+
+	if(logicalBlockAddr < LOGICAL_BLOCKS_PER_SSD)
+	{
+		logicalBlockBaseVsa[logicalBlockAddr] = VSA_NONE;
+		logicalBlockNextOffset[logicalBlockAddr] = 0;
 	}
 }
 
@@ -994,4 +1035,3 @@ void UpdateBadBlockTableForGrownBadBlock(unsigned int tempBufAddr)
 	//update bad block tables in flash
 	SaveBadBlockTable(dieState, tempBbtBufAddr, tempBbtBufEntrySize);
 }
-
