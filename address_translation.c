@@ -690,10 +690,10 @@ unsigned int AddrTransRead(unsigned int logicalSliceAddr)
 	{
 		vSlice = logicalSliceMapPtr->logicalSlice[logicalSliceAddr].virtualSliceAddr;
 		if(vSlice != VSA_NONE){
-			xil_printf("VSA read : LSA %d -> VSA %d \r\n", logicalSliceAddr, vSlice);
+			// xil_printf("VSA read : LSA %d -> VSA %d \r\n", logicalSliceAddr, vSlice);
 			return vSlice;
 		}else{
-			xil_printf("VSA read fail : LSA %d has no mapped VSA\r\n", logicalSliceAddr);
+			// xil_printf("VSA read fail : LSA %d has no mapped VSA\r\n", logicalSliceAddr);
 			return VSA_FAIL;
 		}
 	}
@@ -717,7 +717,7 @@ unsigned int AddrTransWrite(unsigned int logicalSliceAddr)
 	{
 		// 2) 이미 매핑된 LSA에 다시 쓰기가 들어온 경우 - 기존 VSA를 GC 대상으로만 표시
 		assert(virtualSliceMapPtr->virtualSlice[vSlice].logicalSliceAddr == logicalSliceAddr);
-		xil_printf("VSA rewrite : LSA %d was mapped to VSA %d, remapping\r\n", logicalSliceAddr, vSlice);
+		// xil_printf("VSA rewrite : LSA %d was mapped to VSA %d, remapping\r\n", logicalSliceAddr, vSlice);
 		InvalidateOldVsa(logicalSliceAddr);
 	}
 
@@ -726,7 +726,7 @@ unsigned int AddrTransWrite(unsigned int logicalSliceAddr)
 		// 3) 해당 논리 블록에 아직 배정된 물리 블록이 없는 경우 - block-level 전용 블록 예약
 		logicalBlockBaseVsa[block] = FindFreeVirtualBlock();
 		logicalBlockNextOffset[block] = 0;
-		xil_printf("New block allocated for logical block %d : base VSA %d\r\n", block, logicalBlockBaseVsa[block]);
+		// xil_printf("New block allocated for logical block %d : base VSA %d\r\n", block, logicalBlockBaseVsa[block]);
 	}
 
 	// 4) 논리 블록 안에서 사용 가능한 슬롯(페이지)보다 많이 쓰려고 할 때 - 논리 오류
@@ -757,8 +757,8 @@ unsigned int AddrTransWrite(unsigned int logicalSliceAddr)
 	// 5) 단위 블록의 모든 슬라이스를 채웠을 때 - lock 해제 후 다음 write에 새 블록을 할당하도록 초기화
 	if(logicalBlockNextOffset[block] == SLICES_PER_BLOCK)
 	{
-		xil_printf("[BlkAlloc] logical block %d fully populated (base VSA %d)\r\n",
-				block, logicalBlockBaseVsa[block]);
+		// xil_printf("[BlkAlloc] logical block %d fully populated (base VSA %d)\r\n",
+				// block, logicalBlockBaseVsa[block]);
 		// 전체 슬라이스를 모두 채우면 다른 경로가 재사용할 수 있도록 잠금 해제
 		UnlockBlockFromBlkMapping(vsaDie, vsaBlock);
 		logicalBlockBaseVsa[block] = VSA_NONE;
@@ -786,7 +786,7 @@ unsigned int FindFreeVirtualBlock(){
 		}
 		else
 		{
-			xil_printf("[BlkAlloc] free block short on die %d, triggering GC\r\n", dieNo);
+			// xil_printf("[BlkAlloc] free block short on die %d, triggering GC\r\n", dieNo);
 			GarbageCollection(dieNo);
 			currentBlock = virtualDieMapPtr->die[dieNo].currentBlock;
 			assert(currentBlock != BLOCK_FAIL);
@@ -798,8 +798,8 @@ unsigned int FindFreeVirtualBlock(){
 	// 잠금 플래그를 켜 block-level 쓰기 구간임을 표시
 	LockBlockForBlkMapping(dieNo, currentBlock);
 	sliceAllocationTargetDie = FindDieForFreeSliceAllocation();
-	xil_printf("[BlkAlloc] die %d block %d reserved for block-level write (VSA %d)\r\n",
-			dieNo, currentBlock, baseVsa);
+	// xil_printf("[BlkAlloc] die %d block %d reserved for block-level write (VSA %d)\r\n",
+			// dieNo, currentBlock, baseVsa);
 	return baseVsa;
 }
 
