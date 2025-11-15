@@ -63,36 +63,51 @@ unsigned int vBlock_i;
 static unsigned int logicalBlockBaseVsa[LOGICAL_BLOCKS_PER_SSD];
 static unsigned short logicalBlockNextOffset[LOGICAL_BLOCKS_PER_SSD];
 
-#define BLOCK_CUR_PAGE_LOCK_MASK 0x8000
-#define BLOCK_CUR_PAGE_VALUE_MASK 0x7FFF
+#define BLOCK_CUR_PAGE_LOCK_MASK 0x8000// 1000 0000 0000 0000
+#define BLOCK_CUR_PAGE_VALUE_MASK 0x7FFF// 0111 1111 1111 1111 
+//currentPage에서 상위 1bit = block-level 잠금 flag
+//currentPage에서 하위 15bit = 블록 별 실제 프로그램된 페이지 수
+// user_pages_per_block = 16384 (0x4000) 이하이므로 15비트로 충분
 
+/*
+--------------------------------------------------------------------------
+| 1 bit (lock)  |         15 bits (current programmed page count)        |
+--------------------------------------------------------------------------
+*/
+
+// 블록 별 실제 프로그램된 페이지 수(하위 15비트)를 조회
 static inline unsigned int GetBlockCurrentPage(unsigned int dieNo, unsigned int blockNo)
 {
 	return virtualBlockMapPtr->block[dieNo][blockNo].currentPage & BLOCK_CUR_PAGE_VALUE_MASK;
 }
 
-static inline unsigned int IsBlockReservedForSeqWrite(unsigned int dieNo, unsigned int blockNo)
+// 상위 1비트 잠금 플래그를 이용해 블록이 block-level 매핑 전용인지 체크
+static inline unsigned int IsBlockReservedForBlkMapping(unsigned int dieNo, unsigned int blockNo)
 {
 	return virtualBlockMapPtr->block[dieNo][blockNo].currentPage & BLOCK_CUR_PAGE_LOCK_MASK;
 }
 
+// 실제 페이지 수만 갱신하고 잠금 비트는 유지
 static inline void SetBlockCurrentPageCount(unsigned int dieNo, unsigned int blockNo, unsigned int pageCnt)
 {
 	unsigned int lock = virtualBlockMapPtr->block[dieNo][blockNo].currentPage & BLOCK_CUR_PAGE_LOCK_MASK;
 	virtualBlockMapPtr->block[dieNo][blockNo].currentPage = lock | (pageCnt & BLOCK_CUR_PAGE_VALUE_MASK);
 }
 
+// 페이지 수와 잠금 플래그를 모두 초기화
 static inline void ResetBlockCurrentPage(unsigned int dieNo, unsigned int blockNo)
 {
 	virtualBlockMapPtr->block[dieNo][blockNo].currentPage = 0;
 }
 
-static inline void LockBlockForSeqWrite(unsigned int dieNo, unsigned int blockNo)
+// block-level 전용으로 사용할 블록 잠금
+static inline void LockBlockForBlkMapping(unsigned int dieNo, unsigned int blockNo)
 {
 	virtualBlockMapPtr->block[dieNo][blockNo].currentPage |= BLOCK_CUR_PAGE_LOCK_MASK;
 }
 
-static inline void UnlockBlockFromSeqWrite(unsigned int dieNo, unsigned int blockNo)
+// block-level 쓰기 완료 후 잠금 해제
+static inline void UnlockBlockFromBlkMapping(unsigned int dieNo, unsigned int blockNo)
 {
 	virtualBlockMapPtr->block[dieNo][blockNo].currentPage &= BLOCK_CUR_PAGE_VALUE_MASK;
 }
@@ -686,10 +701,12 @@ unsigned int AddrTransRead(unsigned int logicalSliceAddr)
 		assert(!"[WARNING] Logical address is larger than maximum logical address served by SSD [WARNING]");
 }
 
+// 논리 슬라이스 주소를 블록 단위로 새 물리 슬라이스에 매핑
 unsigned int AddrTransWrite(unsigned int logicalSliceAddr)
 {
 	unsigned int block, vSlice, vsaDie, vsaBlock, programmedPages;
 
+	// 1) 호스트가 SSD 최대 LSA를 벗어난 경우 - 치명적 오류
 	if(logicalSliceAddr >= SLICES_PER_SSD)
 		assert(!"[WARNING] Logical address is larger than maximum logical address served by SSD [WARNING]");
 
@@ -698,6 +715,7 @@ unsigned int AddrTransWrite(unsigned int logicalSliceAddr)
 	vSlice = logicalSliceMapPtr->logicalSlice[logicalSliceAddr].virtualSliceAddr;
 	if(vSlice != VSA_NONE)
 	{
+		// 2) 이미 매핑된 LSA에 다시 쓰기가 들어온 경우 - 기존 VSA를 GC 대상으로만 표시
 		assert(virtualSliceMapPtr->virtualSlice[vSlice].logicalSliceAddr == logicalSliceAddr);
 		xil_printf("VSA rewrite : LSA %d was mapped to VSA %d, remapping\r\n", logicalSliceAddr, vSlice);
 		InvalidateOldVsa(logicalSliceAddr);
@@ -705,21 +723,22 @@ unsigned int AddrTransWrite(unsigned int logicalSliceAddr)
 
 	if(logicalBlockBaseVsa[block] == VSA_NONE)
 	{
+		// 3) 해당 논리 블록에 아직 배정된 물리 블록이 없는 경우 - block-level 전용 블록 예약
 		logicalBlockBaseVsa[block] = FindFreeVirtualBlock();
 		logicalBlockNextOffset[block] = 0;
 		xil_printf("New block allocated for logical block %d : base VSA %d\r\n", block, logicalBlockBaseVsa[block]);
 	}
 
+	// 4) 논리 블록 안에서 사용 가능한 슬롯(페이지)보다 많이 쓰려고 할 때 - 논리 오류
 	if(logicalBlockNextOffset[block] >= SLICES_PER_BLOCK)
 		assert(!"[WARNING] Logical block already fully populated [WARNING]");
 
-	{
-		unsigned int baseVsa = logicalBlockBaseVsa[block];
-		unsigned int baseDie = Vsa2VdieTranslation(baseVsa);
-		unsigned int baseBlock = Vsa2VblockTranslation(baseVsa);
-		unsigned int pageOffset = logicalBlockNextOffset[block];
-		vSlice = Vorg2VsaTranslation(baseDie, baseBlock, pageOffset);
-	}
+	// base VSA에서 die/block을 추출해 동일 블록 내 page offset에 해당하는 VSA 계산
+	unsigned int baseVsa = logicalBlockBaseVsa[block];
+	unsigned int baseDie = Vsa2VdieTranslation(baseVsa);
+	unsigned int baseBlock = Vsa2VblockTranslation(baseVsa);
+	unsigned int pageOffset = logicalBlockNextOffset[block];
+	vSlice = Vorg2VsaTranslation(baseDie, baseBlock, pageOffset);
 	logicalBlockNextOffset[block]++;
 
 	logicalSliceMapPtr->logicalSlice[logicalSliceAddr].virtualSliceAddr = vSlice;
@@ -727,6 +746,7 @@ unsigned int AddrTransWrite(unsigned int logicalSliceAddr)
 
 	vsaDie = Vsa2VdieTranslation(vSlice);
 	vsaBlock = Vsa2VblockTranslation(vSlice);
+	// 슬라이스 단위 오프셋을 페이지 단위로 반올림해 현재까지 프로그램된 페이지 수 추적
 	programmedPages = (logicalBlockNextOffset[block] + (SLICES_PER_PAGE - 1)) / SLICES_PER_PAGE;
 	if(GetBlockCurrentPage(vsaDie, vsaBlock) < programmedPages)
 		SetBlockCurrentPageCount(vsaDie, vsaBlock, programmedPages);
@@ -734,11 +754,13 @@ unsigned int AddrTransWrite(unsigned int logicalSliceAddr)
 	xil_printf("VSA write new : LSA %d -> VSA %d (logical block %d, slot %d)\r\n",
 			logicalSliceAddr, vSlice, block, logicalBlockNextOffset[block] - 1);
 
+	// 5) 단위 블록의 모든 슬라이스를 채웠을 때 - lock 해제 후 다음 write에 새 블록을 할당하도록 초기화
 	if(logicalBlockNextOffset[block] == SLICES_PER_BLOCK)
 	{
 		xil_printf("[BlkAlloc] logical block %d fully populated (base VSA %d)\r\n",
 				block, logicalBlockBaseVsa[block]);
-		UnlockBlockFromSeqWrite(vsaDie, vsaBlock);
+		// 전체 슬라이스를 모두 채우면 다른 경로가 재사용할 수 있도록 잠금 해제
+		UnlockBlockFromBlkMapping(vsaDie, vsaBlock);
 		logicalBlockBaseVsa[block] = VSA_NONE;
 		logicalBlockNextOffset[block] = 0;
 	}
@@ -753,7 +775,8 @@ unsigned int FindFreeVirtualBlock(){
 	currentBlock = virtualDieMapPtr->die[dieNo].currentBlock;
 	assert(currentBlock != BLOCK_FAIL);
 	assert(GetBlockCurrentPage(dieNo, currentBlock) <= USER_PAGES_PER_BLOCK);
-	while((GetBlockCurrentPage(dieNo, currentBlock) != 0) || IsBlockReservedForSeqWrite(dieNo, currentBlock))
+	// 이미 일부 페이지를 사용했거나 block-level 전용으로 잠긴 블록은 건너뜀
+	while((GetBlockCurrentPage(dieNo, currentBlock) != 0) || IsBlockReservedForBlkMapping(dieNo, currentBlock))
 	{
 		currentBlock = GetFromFbList(dieNo, GET_FREE_BLOCK_NORMAL);
 		if(currentBlock != BLOCK_FAIL)
@@ -772,7 +795,8 @@ unsigned int FindFreeVirtualBlock(){
 	}
 	baseVsa = Vorg2VsaTranslation(dieNo, currentBlock, 0);
 	ResetBlockCurrentPage(dieNo, currentBlock);
-	LockBlockForSeqWrite(dieNo, currentBlock);
+	// 잠금 플래그를 켜 block-level 쓰기 구간임을 표시
+	LockBlockForBlkMapping(dieNo, currentBlock);
 	sliceAllocationTargetDie = FindDieForFreeSliceAllocation();
 	xil_printf("[BlkAlloc] die %d block %d reserved for block-level write (VSA %d)\r\n",
 			dieNo, currentBlock, baseVsa);
@@ -786,7 +810,7 @@ unsigned int FindFreeVirtualSlice()
 	dieNo = sliceAllocationTargetDie;
 	currentBlock = virtualDieMapPtr->die[dieNo].currentBlock;
 
-	if((GetBlockCurrentPage(dieNo, currentBlock) == USER_PAGES_PER_BLOCK) || IsBlockReservedForSeqWrite(dieNo, currentBlock))
+	if((GetBlockCurrentPage(dieNo, currentBlock) == USER_PAGES_PER_BLOCK) || IsBlockReservedForBlkMapping(dieNo, currentBlock))
 	{
 		currentBlock = GetFromFbList(dieNo, GET_FREE_BLOCK_NORMAL);
 
@@ -797,7 +821,7 @@ unsigned int FindFreeVirtualSlice()
 			GarbageCollection(dieNo);
 			currentBlock = virtualDieMapPtr->die[dieNo].currentBlock;
 
-			if((GetBlockCurrentPage(dieNo, currentBlock) == USER_PAGES_PER_BLOCK) || IsBlockReservedForSeqWrite(dieNo, currentBlock))
+			if((GetBlockCurrentPage(dieNo, currentBlock) == USER_PAGES_PER_BLOCK) || IsBlockReservedForBlkMapping(dieNo, currentBlock))
 			{
 				currentBlock = GetFromFbList(dieNo, GET_FREE_BLOCK_NORMAL);
 				if(currentBlock != BLOCK_FAIL)
@@ -834,7 +858,7 @@ unsigned int FindFreeVirtualSliceForGc(unsigned int copyTargetDieNo, unsigned in
 	}
 	currentBlock = virtualDieMapPtr->die[dieNo].currentBlock;
 
-	if((GetBlockCurrentPage(dieNo, currentBlock) == USER_PAGES_PER_BLOCK) || IsBlockReservedForSeqWrite(dieNo, currentBlock))
+	if((GetBlockCurrentPage(dieNo, currentBlock) == USER_PAGES_PER_BLOCK) || IsBlockReservedForBlkMapping(dieNo, currentBlock))
 	{
 
 		currentBlock = GetFromFbList(dieNo, GET_FREE_BLOCK_GC);
