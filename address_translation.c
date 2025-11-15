@@ -684,14 +684,14 @@ void InitBlockDieMap()
 
 unsigned int AddrTransRead(unsigned int logicalSliceAddr)
 {
-	unsigned int vSlice;
-
-	if(logicalSliceAddr < SLICES_PER_SSD)
+	unsigned int vBlockBase,blockBase;
+	blockBase = AddrToBlockBase(logicalSliceAddr);
+	if(blockBase < SLICES_PER_SSD)
 	{
-		vSlice = logicalSliceMapPtr->logicalSlice[logicalSliceAddr].virtualSliceAddr;
-		if(vSlice != VSA_NONE){
+		vBlockBase = logicalSliceMapPtr->logicalSlice[blockBase].virtualSliceAddr;
+		if(vBlockBase != VSA_NONE){
 			// xil_printf("VSA read : LSA %d -> VSA %d \r\n", logicalSliceAddr, vSlice);
-			return vSlice;
+			return vBlockBase;
 		}else{
 			// xil_printf("VSA read fail : LSA %d has no mapped VSA\r\n", logicalSliceAddr);
 			return VSA_FAIL;
@@ -704,21 +704,21 @@ unsigned int AddrTransRead(unsigned int logicalSliceAddr)
 // 논리 슬라이스 주소를 블록 단위로 새 물리 슬라이스에 매핑
 unsigned int AddrTransWrite(unsigned int logicalSliceAddr)
 {
-	unsigned int block, vSlice, vsaDie, vsaBlock, programmedPages;
+	unsigned int block, blockBase, vBlockBase, vSlice, vsaDie, vsaBlock, programmedPages;
 
 	// 1) 호스트가 SSD 최대 LSA를 벗어난 경우 - 치명적 오류
 	if(logicalSliceAddr >= SLICES_PER_SSD)
 		assert(!"[WARNING] Logical address is larger than maximum logical address served by SSD [WARNING]");
 
 	block = AddrToBlock(logicalSliceAddr);
-
-	vSlice = logicalSliceMapPtr->logicalSlice[logicalSliceAddr].virtualSliceAddr;
-	if(vSlice != VSA_NONE)
+	blockBase = AddrToBlockBase(logicalSliceAddr);
+	vBlockBase = logicalSliceMapPtr->logicalSlice[blockBase].virtualSliceAddr;
+	if(vBlockBase != VSA_NONE)
 	{
 		// 2) 이미 매핑된 LSA에 다시 쓰기가 들어온 경우 - 기존 VSA를 GC 대상으로만 표시
-		assert(virtualSliceMapPtr->virtualSlice[vSlice].logicalSliceAddr == logicalSliceAddr);
+		// assert(virtualSliceMapPtr->virtualSlice[AddrToBlockBase(vSlice)].logicalSliceAddr == AddrToBlockBase(logicalSliceAddr));
 		// xil_printf("VSA rewrite : LSA %d was mapped to VSA %d, remapping\r\n", logicalSliceAddr, vSlice);
-		InvalidateOldVsa(logicalSliceAddr);
+		InvalidateOldVsa(blockBase);
 	}
 
 	if(logicalBlockBaseVsa[block] == VSA_NONE)
@@ -738,21 +738,20 @@ unsigned int AddrTransWrite(unsigned int logicalSliceAddr)
 	unsigned int baseDie = Vsa2VdieTranslation(baseVsa);
 	unsigned int baseBlock = Vsa2VblockTranslation(baseVsa);
 	unsigned int pageOffset = logicalBlockNextOffset[block];
-	vSlice = Vorg2VsaTranslation(baseDie, baseBlock, pageOffset);
+	vBlockBase = Vorg2VsaTranslation(baseDie, baseBlock, pageOffset);
 	logicalBlockNextOffset[block]++;
 
-	logicalSliceMapPtr->logicalSlice[logicalSliceAddr].virtualSliceAddr = vSlice;
-	virtualSliceMapPtr->virtualSlice[vSlice].logicalSliceAddr = logicalSliceAddr;
-
-	vsaDie = Vsa2VdieTranslation(vSlice);
-	vsaBlock = Vsa2VblockTranslation(vSlice);
+	logicalSliceMapPtr->logicalSlice[blockBase].virtualSliceAddr = vBlockBase;
+	virtualSliceMapPtr->virtualSlice[vBlockBase].logicalSliceAddr = blockBase;
+	vsaDie = Vsa2VdieTranslation(vBlockBase);
+	vsaBlock = Vsa2VblockTranslation(vBlockBase);
 	// 슬라이스 단위 오프셋을 페이지 단위로 반올림해 현재까지 프로그램된 페이지 수 추적
 	programmedPages = (logicalBlockNextOffset[block] + (SLICES_PER_PAGE - 1)) / SLICES_PER_PAGE;
 	if(GetBlockCurrentPage(vsaDie, vsaBlock) < programmedPages)
 		SetBlockCurrentPageCount(vsaDie, vsaBlock, programmedPages);
 
 	xil_printf("VSA write new : LSA %d -> VSA %d (logical block %d, slot %d)\r\n",
-			logicalSliceAddr, vSlice, block, logicalBlockNextOffset[block] - 1);
+			logicalSliceAddr, vBlockBase, block, logicalBlockNextOffset[block] - 1);
 
 	// 5) 단위 블록의 모든 슬라이스를 채웠을 때 - lock 해제 후 다음 write에 새 블록을 할당하도록 초기화
 	if(logicalBlockNextOffset[block] == SLICES_PER_BLOCK)
@@ -765,7 +764,7 @@ unsigned int AddrTransWrite(unsigned int logicalSliceAddr)
 		logicalBlockNextOffset[block] = 0;
 	}
 
-	return vSlice;
+	return vBlockBase;
 }
 
 
