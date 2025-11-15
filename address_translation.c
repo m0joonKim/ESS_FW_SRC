@@ -63,6 +63,40 @@ unsigned int vBlock_i;
 static unsigned int logicalBlockBaseVsa[LOGICAL_BLOCKS_PER_SSD];
 static unsigned short logicalBlockNextOffset[LOGICAL_BLOCKS_PER_SSD];
 
+#define BLOCK_CUR_PAGE_LOCK_MASK 0x8000
+#define BLOCK_CUR_PAGE_VALUE_MASK 0x7FFF
+
+static inline unsigned int GetBlockCurrentPage(unsigned int dieNo, unsigned int blockNo)
+{
+	return virtualBlockMapPtr->block[dieNo][blockNo].currentPage & BLOCK_CUR_PAGE_VALUE_MASK;
+}
+
+static inline unsigned int IsBlockReservedForSeqWrite(unsigned int dieNo, unsigned int blockNo)
+{
+	return virtualBlockMapPtr->block[dieNo][blockNo].currentPage & BLOCK_CUR_PAGE_LOCK_MASK;
+}
+
+static inline void SetBlockCurrentPageCount(unsigned int dieNo, unsigned int blockNo, unsigned int pageCnt)
+{
+	unsigned int lock = virtualBlockMapPtr->block[dieNo][blockNo].currentPage & BLOCK_CUR_PAGE_LOCK_MASK;
+	virtualBlockMapPtr->block[dieNo][blockNo].currentPage = lock | (pageCnt & BLOCK_CUR_PAGE_VALUE_MASK);
+}
+
+static inline void ResetBlockCurrentPage(unsigned int dieNo, unsigned int blockNo)
+{
+	virtualBlockMapPtr->block[dieNo][blockNo].currentPage = 0;
+}
+
+static inline void LockBlockForSeqWrite(unsigned int dieNo, unsigned int blockNo)
+{
+	virtualBlockMapPtr->block[dieNo][blockNo].currentPage |= BLOCK_CUR_PAGE_LOCK_MASK;
+}
+
+static inline void UnlockBlockFromSeqWrite(unsigned int dieNo, unsigned int blockNo)
+{
+	virtualBlockMapPtr->block[dieNo][blockNo].currentPage &= BLOCK_CUR_PAGE_VALUE_MASK;
+}
+
 void InitAddressMap()
 {
 	unsigned int blockNo, dieNo;
@@ -239,7 +273,7 @@ void InitBlockMap()
 
 			virtualBlockMapPtr->block[dieNo][virtualBlockNo].free = 1;
 			virtualBlockMapPtr->block[dieNo][virtualBlockNo].invalidSliceCnt = 0;
-			virtualBlockMapPtr->block[dieNo][virtualBlockNo].currentPage = 0;
+			ResetBlockCurrentPage(dieNo, virtualBlockNo);
 			virtualBlockMapPtr->block[dieNo][virtualBlockNo].eraseCnt = 0;
 
 			if(virtualBlockMapPtr->block[dieNo][virtualBlockNo].bad)
@@ -654,7 +688,7 @@ unsigned int AddrTransRead(unsigned int logicalSliceAddr)
 
 unsigned int AddrTransWrite(unsigned int logicalSliceAddr)
 {
-	unsigned int block, vSlice;
+	unsigned int block, vSlice, vsaDie, vsaBlock, programmedPages;
 
 	if(logicalSliceAddr >= SLICES_PER_SSD)
 		assert(!"[WARNING] Logical address is larger than maximum logical address served by SSD [WARNING]");
@@ -665,8 +699,8 @@ unsigned int AddrTransWrite(unsigned int logicalSliceAddr)
 	if(vSlice != VSA_NONE)
 	{
 		assert(virtualSliceMapPtr->virtualSlice[vSlice].logicalSliceAddr == logicalSliceAddr);
-		xil_printf("VSA write existing : LSA %d -> VSA %d \r\n", logicalSliceAddr, vSlice);
-		return vSlice;
+		xil_printf("VSA rewrite : LSA %d was mapped to VSA %d, remapping\r\n", logicalSliceAddr, vSlice);
+		InvalidateOldVsa(logicalSliceAddr);
 	}
 
 	if(logicalBlockBaseVsa[block] == VSA_NONE)
@@ -674,32 +708,40 @@ unsigned int AddrTransWrite(unsigned int logicalSliceAddr)
 		logicalBlockBaseVsa[block] = FindFreeVirtualBlock();
 		logicalBlockNextOffset[block] = 0;
 		xil_printf("New block allocated for logical block %d : base VSA %d\r\n", block, logicalBlockBaseVsa[block]);
-	}else if(logicalBlockNextOffset[block] != 0 &&
-        logicalBlockNextOffset[block] < SLICES_PER_BLOCK)
-	{
-		xil_printf("[BlkAlloc][WARN] logical block %d re-opened while %d/%d slices remained mapped\r\n",
-				block, logicalBlockNextOffset[block], SLICES_PER_BLOCK);
-		InvalidateOldVsaBlock(block);
-		logicalBlockBaseVsa[block] = FindFreeVirtualBlock();
-		logicalBlockNextOffset[block] = 0;
 	}
-	
 
 	if(logicalBlockNextOffset[block] >= SLICES_PER_BLOCK)
 		assert(!"[WARNING] Logical block already fully populated [WARNING]");
 
-	vSlice = logicalBlockBaseVsa[block] + logicalBlockNextOffset[block];
+	{
+		unsigned int baseVsa = logicalBlockBaseVsa[block];
+		unsigned int baseDie = Vsa2VdieTranslation(baseVsa);
+		unsigned int baseBlock = Vsa2VblockTranslation(baseVsa);
+		unsigned int pageOffset = logicalBlockNextOffset[block];
+		vSlice = Vorg2VsaTranslation(baseDie, baseBlock, pageOffset);
+	}
 	logicalBlockNextOffset[block]++;
 
 	logicalSliceMapPtr->logicalSlice[logicalSliceAddr].virtualSliceAddr = vSlice;
 	virtualSliceMapPtr->virtualSlice[vSlice].logicalSliceAddr = logicalSliceAddr;
 
+	vsaDie = Vsa2VdieTranslation(vSlice);
+	vsaBlock = Vsa2VblockTranslation(vSlice);
+	programmedPages = (logicalBlockNextOffset[block] + (SLICES_PER_PAGE - 1)) / SLICES_PER_PAGE;
+	if(GetBlockCurrentPage(vsaDie, vsaBlock) < programmedPages)
+		SetBlockCurrentPageCount(vsaDie, vsaBlock, programmedPages);
+
 	xil_printf("VSA write new : LSA %d -> VSA %d (logical block %d, slot %d)\r\n",
 			logicalSliceAddr, vSlice, block, logicalBlockNextOffset[block] - 1);
 
 	if(logicalBlockNextOffset[block] == SLICES_PER_BLOCK)
+	{
 		xil_printf("[BlkAlloc] logical block %d fully populated (base VSA %d)\r\n",
 				block, logicalBlockBaseVsa[block]);
+		UnlockBlockFromSeqWrite(vsaDie, vsaBlock);
+		logicalBlockBaseVsa[block] = VSA_NONE;
+		logicalBlockNextOffset[block] = 0;
+	}
 
 	return vSlice;
 }
@@ -710,14 +752,14 @@ unsigned int FindFreeVirtualBlock(){
 	dieNo = sliceAllocationTargetDie;
 	currentBlock = virtualDieMapPtr->die[dieNo].currentBlock;
 	assert(currentBlock != BLOCK_FAIL);
-	assert(virtualBlockMapPtr->block[dieNo][currentBlock].currentPage <= USER_PAGES_PER_BLOCK);
-	while(virtualBlockMapPtr->block[dieNo][currentBlock].currentPage != 0)
+	assert(GetBlockCurrentPage(dieNo, currentBlock) <= USER_PAGES_PER_BLOCK);
+	while((GetBlockCurrentPage(dieNo, currentBlock) != 0) || IsBlockReservedForSeqWrite(dieNo, currentBlock))
 	{
 		currentBlock = GetFromFbList(dieNo, GET_FREE_BLOCK_NORMAL);
 		if(currentBlock != BLOCK_FAIL)
 		{
 			virtualDieMapPtr->die[dieNo].currentBlock = currentBlock;
-			virtualBlockMapPtr->block[dieNo][currentBlock].currentPage = 0;
+			ResetBlockCurrentPage(dieNo, currentBlock);
 		}
 		else
 		{
@@ -726,10 +768,11 @@ unsigned int FindFreeVirtualBlock(){
 			currentBlock = virtualDieMapPtr->die[dieNo].currentBlock;
 			assert(currentBlock != BLOCK_FAIL);
 		}
-		assert(virtualBlockMapPtr->block[dieNo][currentBlock].currentPage <= USER_PAGES_PER_BLOCK);
+		assert(GetBlockCurrentPage(dieNo, currentBlock) <= USER_PAGES_PER_BLOCK);
 	}
 	baseVsa = Vorg2VsaTranslation(dieNo, currentBlock, 0);
-	virtualBlockMapPtr->block[dieNo][currentBlock].currentPage = USER_PAGES_PER_BLOCK;
+	ResetBlockCurrentPage(dieNo, currentBlock);
+	LockBlockForSeqWrite(dieNo, currentBlock);
 	sliceAllocationTargetDie = FindDieForFreeSliceAllocation();
 	xil_printf("[BlkAlloc] die %d block %d reserved for block-level write (VSA %d)\r\n",
 			dieNo, currentBlock, baseVsa);
@@ -743,7 +786,7 @@ unsigned int FindFreeVirtualSlice()
 	dieNo = sliceAllocationTargetDie;
 	currentBlock = virtualDieMapPtr->die[dieNo].currentBlock;
 
-	if(virtualBlockMapPtr->block[dieNo][currentBlock].currentPage == USER_PAGES_PER_BLOCK)
+	if((GetBlockCurrentPage(dieNo, currentBlock) == USER_PAGES_PER_BLOCK) || IsBlockReservedForSeqWrite(dieNo, currentBlock))
 	{
 		currentBlock = GetFromFbList(dieNo, GET_FREE_BLOCK_NORMAL);
 
@@ -754,7 +797,7 @@ unsigned int FindFreeVirtualSlice()
 			GarbageCollection(dieNo);
 			currentBlock = virtualDieMapPtr->die[dieNo].currentBlock;
 
-			if(virtualBlockMapPtr->block[dieNo][currentBlock].currentPage == USER_PAGES_PER_BLOCK)
+			if((GetBlockCurrentPage(dieNo, currentBlock) == USER_PAGES_PER_BLOCK) || IsBlockReservedForSeqWrite(dieNo, currentBlock))
 			{
 				currentBlock = GetFromFbList(dieNo, GET_FREE_BLOCK_NORMAL);
 				if(currentBlock != BLOCK_FAIL)
@@ -762,16 +805,16 @@ unsigned int FindFreeVirtualSlice()
 				else
 					assert(!"[WARNING] There is no available block [WARNING]");
 			}
-			else if(virtualBlockMapPtr->block[dieNo][currentBlock].currentPage > USER_PAGES_PER_BLOCK)
+			else if(GetBlockCurrentPage(dieNo, currentBlock) > USER_PAGES_PER_BLOCK)
 				assert(!"[WARNING] Current page management fail [WARNING]");
 		}
 	}
-	else if(virtualBlockMapPtr->block[dieNo][currentBlock].currentPage > USER_PAGES_PER_BLOCK)
+	else if(GetBlockCurrentPage(dieNo, currentBlock) > USER_PAGES_PER_BLOCK)
 		assert(!"[WARNING] Current page management fail [WARNING]");
 
 
-	virtualSliceAddr = Vorg2VsaTranslation(dieNo, currentBlock, virtualBlockMapPtr->block[dieNo][currentBlock].currentPage);
-	virtualBlockMapPtr->block[dieNo][currentBlock].currentPage++;
+	virtualSliceAddr = Vorg2VsaTranslation(dieNo, currentBlock, GetBlockCurrentPage(dieNo, currentBlock));
+	SetBlockCurrentPageCount(dieNo, currentBlock, GetBlockCurrentPage(dieNo, currentBlock) + 1);
 	sliceAllocationTargetDie = FindDieForFreeSliceAllocation();
 	dieNo = sliceAllocationTargetDie;
 	return virtualSliceAddr;
@@ -791,7 +834,7 @@ unsigned int FindFreeVirtualSliceForGc(unsigned int copyTargetDieNo, unsigned in
 	}
 	currentBlock = virtualDieMapPtr->die[dieNo].currentBlock;
 
-	if(virtualBlockMapPtr->block[dieNo][currentBlock].currentPage == USER_PAGES_PER_BLOCK)
+	if((GetBlockCurrentPage(dieNo, currentBlock) == USER_PAGES_PER_BLOCK) || IsBlockReservedForSeqWrite(dieNo, currentBlock))
 	{
 
 		currentBlock = GetFromFbList(dieNo, GET_FREE_BLOCK_GC);
@@ -801,12 +844,12 @@ unsigned int FindFreeVirtualSliceForGc(unsigned int copyTargetDieNo, unsigned in
 		else
 			assert(!"[WARNING] There is no available block [WARNING]");
 	}
-	else if(virtualBlockMapPtr->block[dieNo][currentBlock].currentPage > USER_PAGES_PER_BLOCK)
+	else if(GetBlockCurrentPage(dieNo, currentBlock) > USER_PAGES_PER_BLOCK)
 		assert(!"[WARNING] Current page management fail [WARNING]");
 
 
-	virtualSliceAddr = Vorg2VsaTranslation(dieNo, currentBlock, virtualBlockMapPtr->block[dieNo][currentBlock].currentPage);
-	virtualBlockMapPtr->block[dieNo][currentBlock].currentPage++;
+	virtualSliceAddr = Vorg2VsaTranslation(dieNo, currentBlock, GetBlockCurrentPage(dieNo, currentBlock));
+	SetBlockCurrentPageCount(dieNo, currentBlock, GetBlockCurrentPage(dieNo, currentBlock) + 1);
 	return virtualSliceAddr;
 }
 
@@ -911,7 +954,7 @@ void EraseBlock(unsigned int dieNo, unsigned int blockNo)
 	reqPoolPtr->reqPool[reqSlotTag].reqOpt.rowAddrDependencyCheck = REQ_OPT_ROW_ADDR_DEPENDENCY_CHECK;
 	reqPoolPtr->reqPool[reqSlotTag].reqOpt.blockSpace = REQ_OPT_BLOCK_SPACE_MAIN;
 	reqPoolPtr->reqPool[reqSlotTag].nandInfo.virtualSliceAddr = Vorg2VsaTranslation(dieNo, blockNo, 0);
-	reqPoolPtr->reqPool[reqSlotTag].nandInfo.programmedPageCnt = virtualBlockMapPtr->block[dieNo][blockNo].currentPage;
+	reqPoolPtr->reqPool[reqSlotTag].nandInfo.programmedPageCnt = GetBlockCurrentPage(dieNo, blockNo);
 
 	SelectLowLevelReqQ(reqSlotTag);
 
@@ -919,7 +962,7 @@ void EraseBlock(unsigned int dieNo, unsigned int blockNo)
 	virtualBlockMapPtr->block[dieNo][blockNo].free = 1;
 	virtualBlockMapPtr->block[dieNo][blockNo].eraseCnt++;
 	virtualBlockMapPtr->block[dieNo][blockNo].invalidSliceCnt = 0;
-	virtualBlockMapPtr->block[dieNo][blockNo].currentPage = 0;
+	ResetBlockCurrentPage(dieNo, blockNo);
 
 	PutToFbList(dieNo, blockNo);
 
