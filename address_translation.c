@@ -684,11 +684,11 @@ void InitBlockDieMap()
 
 unsigned int AddrTransRead(unsigned int logicalSliceAddr)
 {
-	unsigned int vBlockBase,blockBase;
-	blockBase = AddrToBlockBase(logicalSliceAddr);
-	if(blockBase < SLICES_PER_SSD)
+	unsigned int vBlockBase, block;
+	block = AddrToBlockBase(logicalSliceAddr);
+	if(logicalSliceAddr < SLICES_PER_SSD)
 	{
-		vBlockBase = logicalSliceMapPtr->logicalSlice[blockBase].virtualSliceAddr;
+		vBlockBase = logicalBlockBaseVsa[block];
 		if(vBlockBase != VSA_NONE){
 			// xil_printf("VSA read : LSA %d -> VSA %d \r\n", logicalSliceAddr, vSlice);
 			return vBlockBase;
@@ -712,24 +712,15 @@ unsigned int AddrTransWrite(unsigned int logicalSliceAddr)
 
 	block = AddrToBlock(logicalSliceAddr);
 	blockBase = AddrToBlockBase(logicalSliceAddr);
-	vBlockBase = logicalSliceMapPtr->logicalSlice[blockBase].virtualSliceAddr;
-	if(vBlockBase != VSA_NONE)
-	{
-		// 2) 이미 매핑된 LSA에 다시 쓰기가 들어온 경우 - 기존 VSA를 GC 대상으로만 표시
-		// assert(virtualSliceMapPtr->virtualSlice[AddrToBlockBase(vSlice)].logicalSliceAddr == AddrToBlockBase(logicalSliceAddr));
-		// xil_printf("VSA rewrite : LSA %d was mapped to VSA %d, remapping\r\n", logicalSliceAddr, vSlice);
-		InvalidateOldVsa(blockBase);
-	}
-
 	if(logicalBlockBaseVsa[block] == VSA_NONE)
 	{
-		// 3) 해당 논리 블록에 아직 배정된 물리 블록이 없는 경우 - block-level 전용 블록 예약
-		logicalBlockBaseVsa[block] = FindFreeVirtualBlock();
+		// 2) 해당 논리 블록에 아직 배정된 물리 블록이 없는 경우 - block-level 전용 블록 예약
+		logicalBlockBaseVsa[block] = FindFreeVirtualBlock();//block level mapping table
 		logicalBlockNextOffset[block] = 0;
 		// xil_printf("New block allocated for logical block %d : base VSA %d\r\n", block, logicalBlockBaseVsa[block]);
 	}
 
-	// 4) 논리 블록 안에서 사용 가능한 슬롯(페이지)보다 많이 쓰려고 할 때 - 논리 오류
+	// 3) 논리 블록 안에서 사용 가능한 슬롯(페이지)보다 많이 쓰려고 할 때 - 논리 오류
 	if(logicalBlockNextOffset[block] >= SLICES_PER_BLOCK)
 		assert(!"[WARNING] Logical block already fully populated [WARNING]");
 
@@ -738,33 +729,32 @@ unsigned int AddrTransWrite(unsigned int logicalSliceAddr)
 	unsigned int baseDie = Vsa2VdieTranslation(baseVsa);
 	unsigned int baseBlock = Vsa2VblockTranslation(baseVsa);
 	unsigned int pageOffset = logicalBlockNextOffset[block];
-	vBlockBase = Vorg2VsaTranslation(baseDie, baseBlock, pageOffset);
+	vSlice = Vorg2VsaTranslation(baseDie, baseBlock, pageOffset);
+	vBlockBase = AddrToBlockBase(vSlice);
 	logicalBlockNextOffset[block]++;
 
-	logicalSliceMapPtr->logicalSlice[blockBase].virtualSliceAddr = vBlockBase;
-	virtualSliceMapPtr->virtualSlice[vBlockBase].logicalSliceAddr = blockBase;
+	logicalSliceMapPtr->logicalSlice[logicalSliceAddr].virtualSliceAddr = vSlice;
+	virtualSliceMapPtr->virtualSlice[vSlice].logicalSliceAddr = logicalSliceAddr; //기존 page-level mapping table은 사용하지 않으나, 그냥 유지.
+
 	vsaDie = Vsa2VdieTranslation(vBlockBase);
 	vsaBlock = Vsa2VblockTranslation(vBlockBase);
 	// 슬라이스 단위 오프셋을 페이지 단위로 반올림해 현재까지 프로그램된 페이지 수 추적
-	programmedPages = (logicalBlockNextOffset[block] + (SLICES_PER_PAGE - 1)) / SLICES_PER_PAGE;
-	if(GetBlockCurrentPage(vsaDie, vsaBlock) < programmedPages)
-		SetBlockCurrentPageCount(vsaDie, vsaBlock, programmedPages);
+	if(GetBlockCurrentPage(vsaDie, vsaBlock) < logicalBlockNextOffset[block])
+		SetBlockCurrentPageCount(vsaDie, vsaBlock, logicalBlockNextOffset[block]);
 
-	xil_printf("VSA write new : LSA %d -> VSA %d (logical block %d, slot %d)\r\n",
-			logicalSliceAddr, vBlockBase, block, logicalBlockNextOffset[block] - 1);
+	xil_printf("VSA write new : LSA %d -> VSA %d (logical block %d, slot %d) virtual Block %d\r\n",
+			logicalSliceAddr, vSlice, block, logicalBlockNextOffset[block] - 1, vBlockBase);
 
-	// 5) 단위 블록의 모든 슬라이스를 채웠을 때 - lock 해제 후 다음 write에 새 블록을 할당하도록 초기화
+	// 5) 단위 블록의 모든 슬라이스를 채웠을 때 - lock 해제 후 다음 write에 새 블록을 할당하도록 초기화 // 없애도 되나?
 	if(logicalBlockNextOffset[block] == SLICES_PER_BLOCK)
 	{
-		// xil_printf("[BlkAlloc] logical block %d fully populated (base VSA %d)\r\n",
-				// block, logicalBlockBaseVsa[block]);
 		// 전체 슬라이스를 모두 채우면 다른 경로가 재사용할 수 있도록 잠금 해제
 		UnlockBlockFromBlkMapping(vsaDie, vsaBlock);
 		logicalBlockBaseVsa[block] = VSA_NONE;
 		logicalBlockNextOffset[block] = 0;
 	}
 
-	return vBlockBase;
+	return vSlice;
 }
 
 
