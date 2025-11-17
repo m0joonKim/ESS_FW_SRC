@@ -603,33 +603,34 @@ void InitBlockDieMap() {
 
 // mjKim Code Start
 unsigned int AddrTransRead(unsigned int logicalSliceAddr) {  // lsa -> lbn -> pba (physical block address)
-    unsigned int block = AddrToBlock(logicalSliceAddr);
+    unsigned int lbn = AddrToBlock(logicalSliceAddr);
     if (logicalSliceAddr < SLICES_PER_SSD)
-        return (lbnToPbnMap[block] != VSA_NONE) ? lbnToPbnMap[block] : VSA_FAIL;
+        return (lbnToPbnMap[lbn] != VSA_NONE) ? lbnToPbnMap[lbn] : VSA_FAIL;
     else
         assert(!"[WARNING] Logical address is larger than maximum logical address served by SSD [WARNING]");
 }
 
-unsigned int AddrTransWrite(unsigned int logicalSliceAddr) {
-    unsigned int block = AddrToBlock(logicalSliceAddr);
+static inline unsigned int GetCurrentVirtualSliceOfVirtualBlock(unsigned int lbn) {  // return a current virtual slice address of a virtual block mapped to the given logical block number
+    unsigned int baseVsa = lbnToPbnMap[lbn];
+    unsigned int die = Vsa2VdieTranslation(baseVsa);
+    unsigned int block = Vsa2VblockTranslation(baseVsa);
+    unsigned int vsa = Vorg2VsaTranslation(die, block, lbnToPbnNextOffset[lbn]++);
+    SetBlockCurrentPageCount(die, block, lbnToPbnNextOffset[lbn]);
+    if (lbnToPbnNextOffset[lbn] == SLICES_PER_BLOCK) {
+        UnlockBlockFromBlkMapping(die, block);
+        lbnToPbnMap[lbn] = VSA_NONE;
+        lbnToPbnNextOffset[lbn] = 0;
+    }
+    return vsa;
+}
 
+unsigned int AddrTransWrite(unsigned int logicalSliceAddr) {
     if (logicalSliceAddr >= SLICES_PER_SSD)
         assert(!"[WARNING] Logical address is larger than maximum logical address served by SSD [WARNING]");
-
-    if (lbnToPbnNextOffset[block]++ == 0)             // if lbnToPbnNextOffset is 0, it means new block allocation is needed
-        lbnToPbnMap[block] = FindFreeVirtualBlock();  // Find Free Virtual Block and assign to lbnToPbnMap (lbn->pba)
-
-    unsigned int vBaseDie = Vsa2VdieTranslation(lbnToPbnMap[block]);
-    unsigned int vBaseBlock = Vsa2VblockTranslation(lbnToPbnMap[block]);
-    SetBlockCurrentPageCount(vBaseDie, vBaseBlock, lbnToPbnNextOffset[block]);  // set current page count to next offset
-
-    if (lbnToPbnNextOffset[block] == SLICES_PER_BLOCK) {  // if all slices in the block are used, unlock the block and reset mapping info
-        UnlockBlockFromBlkMapping(vBaseDie, vBaseBlock);
-        lbnToPbnMap[block] = VSA_NONE;
-        lbnToPbnNextOffset[block] = 0;
-    }
-
-    return lbnToPbnMap[block];
+    unsigned int lbn = AddrToBlock(logicalSliceAddr);
+    if (lbnToPbnMap[lbn] == VSA_NONE)               // 해당 LBN에 아직 블록이 안 붙어 있으면
+        lbnToPbnMap[lbn] = FindFreeVirtualBlock();  // 새 virtual block 하나 가져와서 붙임
+    return GetCurrentVirtualSliceOfVirtualBlock(lbn);
 }
 
 unsigned int FindFreeVirtualBlock() {  // return a virtual block base address for block-level mapping
@@ -655,7 +656,6 @@ unsigned int FindFreeVirtualBlock() {  // return a virtual block base address fo
     // set lock flag to indicate block-level write section
     LockBlockForBlkMapping(dieNo, currentBlock);
     sliceAllocationTargetDie = FindDieForFreeSliceAllocation();
-    dieNo = sliceAllocationTargetDie;
     return Vorg2VsaTranslation(dieNo, currentBlock, 0);  // we cant used offset information for block-level mapping. so, offset is always 0
 }
 // mjKim Code End
