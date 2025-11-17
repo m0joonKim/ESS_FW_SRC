@@ -646,9 +646,9 @@ unsigned int AddrTransWrite(unsigned int logicalSliceAddr) {
 
     // ** 기존 lpn - ppn 매핑테이블 초기화 및 갱신로직
     // ** lbn-pbn 매핑테이블을 새로 정의했기에 AddrTransRead/Writed에서 사용하지는 않음.
-    InvalidateOldVsa(logicalSliceAddr);
-    logicalSliceMapPtr->logicalSlice[logicalSliceAddr].virtualSliceAddr = vSlice;
-    virtualSliceMapPtr->virtualSlice[vSlice].logicalSliceAddr = logicalSliceAddr;
+    // InvalidateOldVsa(logicalSliceAddr);
+    // logicalSliceMapPtr->logicalSlice[logicalSliceAddr].virtualSliceAddr = vSlice;
+    // virtualSliceMapPtr->virtualSlice[vSlice].logicalSliceAddr = logicalSliceAddr;
 
     // currentPage lbnToPbnNextOffset을 확인하고, 갱신하는 로직.
     // 순차증가이기때문에 사실 GetBlockCurrentPage이 들어가는 조건문을 사용할 필요는 없음.
