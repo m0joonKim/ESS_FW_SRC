@@ -61,8 +61,8 @@ unsigned char sliceAllocationTargetDie;
 unsigned int mbPerbadBlockSpace;
 
 // mjKim Code Start
-static unsigned int logicalBlockBaseVsa[LOGICAL_BLOCKS_PER_SSD];
-static unsigned short logicalBlockNextOffset[LOGICAL_BLOCKS_PER_SSD];
+static unsigned int lbnToPbnMap[LOGICAL_BLOCKS_PER_SSD];
+static unsigned short lbnToPbnNextOffset[LOGICAL_BLOCKS_PER_SSD];
 
 #define BLOCK_CUR_PAGE_LOCK_MASK 0x8000   // 1000 0000 0000 0000
 #define BLOCK_CUR_PAGE_VALUE_MASK 0x7FFF  // 0111 1111 1111 1111
@@ -140,8 +140,8 @@ void InitSliceMap() {
     }
     // mjKim Code Start
     for (sliceAddr = 0; sliceAddr < LOGICAL_BLOCKS_PER_SSD; sliceAddr++) {
-        logicalBlockBaseVsa[sliceAddr] = VSA_NONE;
-        logicalBlockNextOffset[sliceAddr] = 0;
+        lbnToPbnMap[sliceAddr] = VSA_NONE;
+        lbnToPbnNextOffset[sliceAddr] = 0;
     }
     // mjKim Code End
 }
@@ -604,9 +604,9 @@ void InitBlockDieMap() {
 // mjKim Code Start
 unsigned int AddrTransRead(unsigned int logicalSliceAddr) {
     unsigned int vBlockBase, block;
-    block = AddrToBlockBase(logicalSliceAddr);
+    block = AddrToBlock(logicalSliceAddr);
     if (logicalSliceAddr < SLICES_PER_SSD) {
-        vBlockBase = logicalBlockBaseVsa[block];
+        vBlockBase = lbnToPbnMap[block];
         if (vBlockBase != VSA_NONE) {
             // xil_printf("VSA read : LSA %d -> VSA %d \r\n", logicalSliceAddr, vSlice);
             return vBlockBase;
@@ -620,52 +620,48 @@ unsigned int AddrTransRead(unsigned int logicalSliceAddr) {
 
 // 논리 슬라이스 주소를 블록 단위로 새 물리 슬라이스에 매핑
 unsigned int AddrTransWrite(unsigned int logicalSliceAddr) {
-    unsigned int block, blockBase, vBlockBase, vSlice, vsaDie, vsaBlock, programmedPages;
+    unsigned int block, vSlice;
 
     // 1) 호스트가 SSD 최대 LSA를 벗어난 경우 - 치명적 오류
     if (logicalSliceAddr >= SLICES_PER_SSD)
         assert(!"[WARNING] Logical address is larger than maximum logical address served by SSD [WARNING]");
 
     block = AddrToBlock(logicalSliceAddr);
-    blockBase = AddrToBlockBase(logicalSliceAddr);
-    if (logicalBlockBaseVsa[block] == VSA_NONE) {
+    if (lbnToPbnMap[block] == VSA_NONE) {
         // 2) 해당 논리 블록에 아직 배정된 물리 블록이 없는 경우 - block-level 전용 블록 예약
-        logicalBlockBaseVsa[block] = FindFreeVirtualBlock();  // block level mapping table
-        logicalBlockNextOffset[block] = 0;
+        lbnToPbnMap[block] = FindFreeVirtualBlock();  // block level mapping table
+        lbnToPbnNextOffset[block] = 0;
         // xil_printf("New block allocated for logical block %d : base VSA %d\r\n", block, logicalBlockBaseVsa[block]);
     }
 
     // 3) 논리 블록 안에서 사용 가능한 슬롯(페이지)보다 많이 쓰려고 할 때 - 논리 오류
-    if (logicalBlockNextOffset[block] >= SLICES_PER_BLOCK)
+    if (lbnToPbnNextOffset[block] >= SLICES_PER_BLOCK)
         assert(!"[WARNING] Logical block already fully populated [WARNING]");
 
     // base VSA에서 die/block을 추출해 동일 블록 내 page offset에 해당하는 VSA 계산
-    unsigned int baseVsa = logicalBlockBaseVsa[block];
+    unsigned int baseVsa = lbnToPbnMap[block];
     unsigned int baseDie = Vsa2VdieTranslation(baseVsa);
     unsigned int baseBlock = Vsa2VblockTranslation(baseVsa);
-    unsigned int pageOffset = logicalBlockNextOffset[block];
+    unsigned int pageOffset = lbnToPbnNextOffset[block];
     vSlice = Vorg2VsaTranslation(baseDie, baseBlock, pageOffset);
-    vBlockBase = AddrToBlockBase(vSlice);
-    logicalBlockNextOffset[block]++;
+    lbnToPbnNextOffset[block]++;
 
     logicalSliceMapPtr->logicalSlice[logicalSliceAddr].virtualSliceAddr = vSlice;
     virtualSliceMapPtr->virtualSlice[vSlice].logicalSliceAddr = logicalSliceAddr;  // 기존 page-level mapping table은 사용하지 않으나, 그냥 유지.
 
-    vsaDie = Vsa2VdieTranslation(vBlockBase);
-    vsaBlock = Vsa2VblockTranslation(vBlockBase);
     // 슬라이스 단위 오프셋을 페이지 단위로 반올림해 현재까지 프로그램된 페이지 수 추적
-    if (GetBlockCurrentPage(vsaDie, vsaBlock) < logicalBlockNextOffset[block])
-        SetBlockCurrentPageCount(vsaDie, vsaBlock, logicalBlockNextOffset[block]);
+    if (GetBlockCurrentPage(baseDie, baseBlock) < lbnToPbnNextOffset[block])
+        SetBlockCurrentPageCount(baseDie, baseBlock, lbnToPbnNextOffset[block]);
 
     xil_printf("VSA write new : LSA %d -> VSA %d (logical block %d, slot %d) virtual Block %d\r\n",
-               logicalSliceAddr, vSlice, block, logicalBlockNextOffset[block] - 1, vBlockBase);
+               logicalSliceAddr, vSlice, block, lbnToPbnNextOffset[block] - 1, baseVsa);
 
     // 5) 단위 블록의 모든 슬라이스를 채웠을 때 - lock 해제 후 다음 write에 새 블록을 할당하도록 초기화 // 없애도 되나?
-    if (logicalBlockNextOffset[block] == SLICES_PER_BLOCK) {
+    if (lbnToPbnNextOffset[block] == SLICES_PER_BLOCK) {
         // 전체 슬라이스를 모두 채우면 다른 경로가 재사용할 수 있도록 잠금 해제
-        UnlockBlockFromBlkMapping(vsaDie, vsaBlock);
-        logicalBlockBaseVsa[block] = VSA_NONE;
-        logicalBlockNextOffset[block] = 0;
+        UnlockBlockFromBlkMapping(baseDie, baseBlock);
+        lbnToPbnMap[block] = VSA_NONE;
+        lbnToPbnNextOffset[block] = 0;
     }
 
     return vSlice;
