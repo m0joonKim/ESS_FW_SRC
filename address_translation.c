@@ -70,7 +70,7 @@ static unsigned short lbnToPbnNextOffset[LOGICAL_BLOCKS_PER_SSD];
 // currentPage에서 하위 15bit = 블록 별 실제 프로그램된 페이지 수
 //  user_pages_per_block = 16384 (0x4000) 이하이므로 15비트로 충분
 
-/*
+/*                       [ currentPage 구조 ]
 --------------------------------------------------------------------------
 | 1 bit (lock)  |         15 bits (current programmed page count)        |
 --------------------------------------------------------------------------
@@ -635,17 +635,17 @@ unsigned int AddrTransWrite(unsigned int logicalSliceAddr) {
     unsigned int baseBlock = Vsa2VblockTranslation(baseVsa);
     // ** Offset은 lsa가 아닌, lbnToPbnNextOffset를 사용
     unsigned int pageOffset = lbnToPbnNextOffset[block];
-    // real block-level mapping이라면, 이것 대신 logcialSliceAddr로부터 추출한 Offset을 가야함
-    // 그렇게되면, AddrTransRead함수에서 lbnToPbnMap[block]으로 baseVsa를 구하고,
-    // logicalSliceAddr로부터 Offset을 구해서 Vsa를 찾아낼 수 있음.
+    // ** real block-level mapping이라면, 이것 대신 logcialSliceAddr로부터 추출한 Offset을 가야함
+    // ** 그렇게되면, AddrTransRead함수에서 lbnToPbnMap[block]으로 baseVsa를 구하고,
+    // ** logicalSliceAddr로부터 Offset을 구해서 Vsa를 찾아낼 수 있음.
     vSlice = Vorg2VsaTranslation(baseDie, baseBlock, pageOffset);
-    // 실제 lsa - vsa 주소임. 이건 새로 정의한 lbn - pbn 매핑테이블을 위한것이 아니라, 기존 테이블에 저장하는용도.
-    // real-block level 이었다면 이건 사실 구할필요 없음. addrTransRead에서 알아낼 수 있으므로.
+    // ** 실제 lsa - vsa 주소임. 이건 새로 정의한 lbn - pbn 매핑테이블을 위한것이 아니라, 기존 테이블에 저장하는용도.
+    // ** real-block level 이었다면 이건 사실 구할필요 없음. addrTransRead에서 알아낼 수 있으므로.
     lbnToPbnNextOffset[block]++;
     // offset증가
 
-    // 기존 lpn - ppn 매핑테이블 초기화 및 갱신로직
-    //  lbn-pbn 매핑테이블을 새로 정의했기에 AddrTransRead/Writed에서 사용하지는 않음.
+    // ** 기존 lpn - ppn 매핑테이블 초기화 및 갱신로직
+    // ** lbn-pbn 매핑테이블을 새로 정의했기에 AddrTransRead/Writed에서 사용하지는 않음.
     invalidateOldVsa(logicalSliceAddr);
     logicalSliceMapPtr->logicalSlice[logicalSliceAddr].virtualSliceAddr = vSlice;
     virtualSliceMapPtr->virtualSlice[vSlice].logicalSliceAddr = logicalSliceAddr;
@@ -659,9 +659,9 @@ unsigned int AddrTransWrite(unsigned int logicalSliceAddr) {
     xil_printf("VSA write new : LSA %d -> VSA %d (logical block %d, slot %d) virtual Block %d\r\n",
                logicalSliceAddr, vSlice, block, lbnToPbnNextOffset[block] - 1, baseVsa);
 
-    // 만약 블럭이 가득찼다면 매핑정보를 초기화하여 다른 block에 쓸수 있게 함
-    // real-block level이라면, offset별로 매핑이 되므로 이럴일이 없고, read-modify-write 등을 사용하므로
-    // 이와 다른 로직이 필요하지만, 우리는 sequential increase 방식이므로 이 로직을 사용함.
+    // ** 만약 블럭이 가득찼다면 매핑정보를 초기화하여 다른 block에 쓸수 있게 함
+    // ** real-block level이라면, offset별로 매핑이 되므로 이럴일이 없고, read-modify-write 등을 사용하므로
+    // ** 이와 다른 로직이 필요하지만, 우리는 sequential increase 방식이므로 이 로직을 사용함.
     if (lbnToPbnNextOffset[block] == SLICES_PER_BLOCK) {
         UnlockBlockFromBlkMapping(baseDie, baseBlock);
         lbnToPbnMap[block] = VSA_NONE;

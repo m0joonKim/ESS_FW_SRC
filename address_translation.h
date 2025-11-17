@@ -109,9 +109,6 @@
 
 // mjKim Code Start
 #define AddrToBlock(addr) ((addr) / (SLICES_PER_BLOCK))
-#define AddrToOffset(addr) ((addr) % (SLICES_PER_BLOCK))
-#define BlockToBlockBase(block) ((block) * (SLICES_PER_BLOCK))
-#define AddrToBlockBase(addr) (AddrToBlock(addr) * (SLICES_PER_BLOCK))
 #define LOGICAL_BLOCKS_PER_SSD (SLICES_PER_SSD / (SLICES_PER_BLOCK))
 // mjKim Code End
 
