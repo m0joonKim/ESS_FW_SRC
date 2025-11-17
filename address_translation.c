@@ -646,7 +646,7 @@ unsigned int AddrTransWrite(unsigned int logicalSliceAddr) {
 
     // ** 기존 lpn - ppn 매핑테이블 초기화 및 갱신로직
     // ** lbn-pbn 매핑테이블을 새로 정의했기에 AddrTransRead/Writed에서 사용하지는 않음.
-    invalidateOldVsa(logicalSliceAddr);
+    InvalidateOldVsa(logicalSliceAddr);
     logicalSliceMapPtr->logicalSlice[logicalSliceAddr].virtualSliceAddr = vSlice;
     virtualSliceMapPtr->virtualSlice[vSlice].logicalSliceAddr = logicalSliceAddr;
 
