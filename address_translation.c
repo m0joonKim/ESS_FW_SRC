@@ -61,48 +61,48 @@ unsigned char sliceAllocationTargetDie;
 unsigned int mbPerbadBlockSpace;
 
 // mjKim Code Start
-static unsigned int lbnToPbnMap[LOGICAL_BLOCKS_PER_SSD];
-static unsigned short lbnToPbnNextOffset[LOGICAL_BLOCKS_PER_SSD];
+static unsigned int lbnToPbnMap[LOGICAL_BLOCKS_PER_SSD];           // lbn -> pbn (physical block address) mapping table
+static unsigned short lbnToPbnNextOffset[LOGICAL_BLOCKS_PER_SSD];  // next offset to write in the lbn (used for block-level mapping)
 
 #define BLOCK_CUR_PAGE_LOCK_MASK 0x8000   // 1000 0000 0000 0000
 #define BLOCK_CUR_PAGE_VALUE_MASK 0x7FFF  // 0111 1111 1111 1111
-// currentPage에서 상위 1bit = block-level 잠금 flag
-// currentPage에서 하위 15bit = 블록 별 실제 프로그램된 페이지 수
-//  user_pages_per_block = 16384 (0x4000) 이하이므로 15비트로 충분
+// currentPage에서 msb = block-level lock flag
+// currentPage에서 lower 15bits = page count of the block
+//  user_pages_per_block = 16384 (0x4000) -> enough with 15 bits
 
-/*                       [ currentPage 구조 ]
+/*                       [ currentPage structure ]
 --------------------------------------------------------------------------
 | 1 bit (lock)  |         15 bits (current programmed page count)        |
 --------------------------------------------------------------------------
 */
 
-// 블록 별 실제 프로그램된 페이지 수(하위 15비트)를 조회
+// Get current programmed page count of the block
 static inline unsigned int GetBlockCurrentPage(unsigned int dieNo, unsigned int blockNo) {
     return virtualBlockMapPtr->block[dieNo][blockNo].currentPage & BLOCK_CUR_PAGE_VALUE_MASK;
 }
 
-// 상위 1비트 잠금 플래그를 이용해 블록이 block-level 매핑 전용인지 체크
+// Check whether the block is reserved for block-level mapping using the msb lock flag
 static inline unsigned int IsBlockReservedForBlkMapping(unsigned int dieNo, unsigned int blockNo) {
     return virtualBlockMapPtr->block[dieNo][blockNo].currentPage & BLOCK_CUR_PAGE_LOCK_MASK;
 }
 
-// 실제 페이지 수만 갱신하고 잠금 비트는 유지
+// Set current programmed page count of the block, preserving the lock flag
 static inline void SetBlockCurrentPageCount(unsigned int dieNo, unsigned int blockNo, unsigned int pageCnt) {
     unsigned int lock = virtualBlockMapPtr->block[dieNo][blockNo].currentPage & BLOCK_CUR_PAGE_LOCK_MASK;
     virtualBlockMapPtr->block[dieNo][blockNo].currentPage = lock | (pageCnt & BLOCK_CUR_PAGE_VALUE_MASK);
 }
 
-// 페이지 수와 잠금 플래그를 모두 초기화
+// initialize currentPage of the block to 0 (so, unlock the block as well)
 static inline void ResetBlockCurrentPage(unsigned int dieNo, unsigned int blockNo) {
     virtualBlockMapPtr->block[dieNo][blockNo].currentPage = 0;
 }
 
-// block-level 전용으로 사용할 블록 잠금
+// Lock block for block-level mapping
 static inline void LockBlockForBlkMapping(unsigned int dieNo, unsigned int blockNo) {
     virtualBlockMapPtr->block[dieNo][blockNo].currentPage |= BLOCK_CUR_PAGE_LOCK_MASK;
 }
 
-// block-level 쓰기 완료 후 잠금 해제
+// Unlock block after block-level write completion
 static inline void UnlockBlockFromBlkMapping(unsigned int dieNo, unsigned int blockNo) {
     virtualBlockMapPtr->block[dieNo][blockNo].currentPage &= BLOCK_CUR_PAGE_VALUE_MASK;
 }
@@ -602,60 +602,43 @@ void InitBlockDieMap() {
 }
 
 // mjKim Code Start
-unsigned int AddrTransRead(unsigned int logicalSliceAddr) {
-    // lsa -> block 변환, lbn-pbn 매핑테이블에서 pbn 추출 및 반환
-    unsigned int block;
-    block = AddrToBlock(logicalSliceAddr);
+unsigned int AddrTransRead(unsigned int logicalSliceAddr) {  // lsa -> lbn -> pba (physical block address)
+    unsigned int block = AddrToBlock(logicalSliceAddr);
     if (logicalSliceAddr < SLICES_PER_SSD)
         return (lbnToPbnMap[block] != VSA_NONE) ? lbnToPbnMap[block] : VSA_FAIL;
     else
         assert(!"[WARNING] Logical address is larger than maximum logical address served by SSD [WARNING]");
 }
 
-// 논리 슬라이스 주소를 블록 단위로 새 물리 슬라이스에 매핑
 unsigned int AddrTransWrite(unsigned int logicalSliceAddr) {
-    unsigned int block, vBlockBase;
+    unsigned int block = AddrToBlock(logicalSliceAddr);
 
-    // 1) 호스트가 SSD 최대 LSA를 벗어난 경우 - 치명적 오류
     if (logicalSliceAddr >= SLICES_PER_SSD)
         assert(!"[WARNING] Logical address is larger than maximum logical address served by SSD [WARNING]");
 
-    block = AddrToBlock(logicalSliceAddr);
-    if (lbnToPbnMap[block] == VSA_NONE) {             // lbn - pbn 관계가 없다면
-        lbnToPbnMap[block] = FindFreeVirtualBlock();  // new block 찾아와서, lbn - pbn 매핑 설정
-        lbnToPbnNextOffset[block] = 0;                // 처음 사용하는 블럭이므로 offset 0으로 초기화
-    }
-    vBlockBase = lbnToPbnMap[block];
-    if (lbnToPbnNextOffset[block] >= SLICES_PER_BLOCK)  // 해당 논리 블록이 이미 가득 찼다면
-        assert(!"[WARNING] Logical block already fully populated [WARNING]");
+    if (lbnToPbnNextOffset[block]++ == 0)             // if lbnToPbnNextOffset is 0, it means new block allocation is needed
+        lbnToPbnMap[block] = FindFreeVirtualBlock();  // Find Free Virtual Block and assign to lbnToPbnMap (lbn->pba)
 
-    lbnToPbnNextOffset[block]++;
-    // offset증가
-    unsigned int vBaseDie = Vsa2VdieTranslation(vBlockBase);
-    unsigned int vBaseBlock = Vsa2VblockTranslation(vBlockBase);
-    if (GetBlockCurrentPage(vBaseDie, vBaseBlock) < lbnToPbnNextOffset[block])
-        SetBlockCurrentPageCount(vBaseDie, vBaseBlock, lbnToPbnNextOffset[block]);
+    unsigned int vBaseDie = Vsa2VdieTranslation(lbnToPbnMap[block]);
+    unsigned int vBaseBlock = Vsa2VblockTranslation(lbnToPbnMap[block]);
+    SetBlockCurrentPageCount(vBaseDie, vBaseBlock, lbnToPbnNextOffset[block]);  // set current page count to next offset
 
-    // ** 만약 블럭이 가득찼다면 매핑정보를 초기화하여 다른 block에 쓸수 있게 함
-    // ** real-block level이라면, offset별로 매핑이 되므로 이럴일이 없고, read-modify-write 등을 사용하므로
-    // ** 이와 다른 로직이 필요하지만, 우리는 sequential increase 방식이므로 이 로직을 사용함.
-    if (lbnToPbnNextOffset[block] == SLICES_PER_BLOCK) {
+    if (lbnToPbnNextOffset[block] == SLICES_PER_BLOCK) {  // if all slices in the block are used, unlock the block and reset mapping info
         UnlockBlockFromBlkMapping(vBaseDie, vBaseBlock);
         lbnToPbnMap[block] = VSA_NONE;
         lbnToPbnNextOffset[block] = 0;
-        // 잠금 해제 및 매핑정보 초기화
     }
 
-    return vBlockBase;
+    return lbnToPbnMap[block];
 }
 
-unsigned int FindFreeVirtualBlock() {
-    unsigned int dieNo, currentBlock, baseVsa;
+unsigned int FindFreeVirtualBlock() {  // return a virtual block base address for block-level mapping
+    unsigned int dieNo, currentBlock;
     dieNo = sliceAllocationTargetDie;
     currentBlock = virtualDieMapPtr->die[dieNo].currentBlock;
     assert(currentBlock != BLOCK_FAIL);
     assert(GetBlockCurrentPage(dieNo, currentBlock) <= USER_PAGES_PER_BLOCK);
-    // 이미 일부 페이지를 사용했거나 block-level 전용으로 잠긴 블록은 건너뜀
+    // if some pages are already used or block is locked for block-level mapping, skip the block
     while ((GetBlockCurrentPage(dieNo, currentBlock) != 0) || IsBlockReservedForBlkMapping(dieNo, currentBlock)) {
         currentBlock = GetFromFbList(dieNo, GET_FREE_BLOCK_NORMAL);
         if (currentBlock != BLOCK_FAIL) {
@@ -668,13 +651,12 @@ unsigned int FindFreeVirtualBlock() {
         }
         assert(GetBlockCurrentPage(dieNo, currentBlock) <= USER_PAGES_PER_BLOCK);
     }
-    baseVsa = Vorg2VsaTranslation(dieNo, currentBlock, 0);  // blockBaseAddress이므로 offset 0
     ResetBlockCurrentPage(dieNo, currentBlock);
-    // 잠금 플래그를 켜 block-level 쓰기 구간임을 표시
+    // set lock flag to indicate block-level write section
     LockBlockForBlkMapping(dieNo, currentBlock);
     sliceAllocationTargetDie = FindDieForFreeSliceAllocation();
     dieNo = sliceAllocationTargetDie;
-    return baseVsa;
+    return Vorg2VsaTranslation(dieNo, currentBlock, 0);  // we cant used offset information for block-level mapping. so, offset is always 0
 }
 // mjKim Code End
 
