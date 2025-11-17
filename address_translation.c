@@ -614,7 +614,7 @@ unsigned int AddrTransRead(unsigned int logicalSliceAddr) {
 
 // 논리 슬라이스 주소를 블록 단위로 새 물리 슬라이스에 매핑
 unsigned int AddrTransWrite(unsigned int logicalSliceAddr) {
-    unsigned int block, vSlice;
+    unsigned int block, vBlockBase;
 
     // 1) 호스트가 SSD 최대 LSA를 벗어난 경우 - 치명적 오류
     if (logicalSliceAddr >= SLICES_PER_SSD)
@@ -625,51 +625,28 @@ unsigned int AddrTransWrite(unsigned int logicalSliceAddr) {
         lbnToPbnMap[block] = FindFreeVirtualBlock();  // new block 찾아와서, lbn - pbn 매핑 설정
         lbnToPbnNextOffset[block] = 0;                // 처음 사용하는 블럭이므로 offset 0으로 초기화
     }
-
+    vBlockBase = lbnToPbnMap[block];
     if (lbnToPbnNextOffset[block] >= SLICES_PER_BLOCK)  // 해당 논리 블록이 이미 가득 찼다면
         assert(!"[WARNING] Logical block already fully populated [WARNING]");
 
-    // 저장된 lbn - pbn 매핑 정보로부터 Vsa, Die, Block 추출
-    unsigned int baseVsa = lbnToPbnMap[block];
-    unsigned int baseDie = Vsa2VdieTranslation(baseVsa);
-    unsigned int baseBlock = Vsa2VblockTranslation(baseVsa);
-    // ** Offset은 lsa가 아닌, lbnToPbnNextOffset를 사용
-    unsigned int pageOffset = lbnToPbnNextOffset[block];
-    // ** real block-level mapping이라면, 이것 대신 logcialSliceAddr로부터 추출한 Offset을 가야함
-    // ** 그렇게되면, AddrTransRead함수에서 lbnToPbnMap[block]으로 baseVsa를 구하고,
-    // ** logicalSliceAddr로부터 Offset을 구해서 Vsa를 찾아낼 수 있음.
-    vSlice = Vorg2VsaTranslation(baseDie, baseBlock, pageOffset);
-    // ** 실제 lsa - vsa 주소임. 이건 새로 정의한 lbn - pbn 매핑테이블을 위한것이 아니라, 기존 테이블에 저장하는용도.
-    // ** real-block level 이었다면 이건 사실 구할필요 없음. addrTransRead에서 알아낼 수 있으므로.
     lbnToPbnNextOffset[block]++;
     // offset증가
-
-    // ** 기존 lpn - ppn 매핑테이블 초기화 및 갱신로직
-    // ** lbn-pbn 매핑테이블을 새로 정의했기에 AddrTransRead/Writed에서 사용하지는 않음.
-    // InvalidateOldVsa(logicalSliceAddr);
-    // logicalSliceMapPtr->logicalSlice[logicalSliceAddr].virtualSliceAddr = vSlice;
-    // virtualSliceMapPtr->virtualSlice[vSlice].logicalSliceAddr = logicalSliceAddr;
-
-    // currentPage lbnToPbnNextOffset을 확인하고, 갱신하는 로직.
-    // 순차증가이기때문에 사실 GetBlockCurrentPage이 들어가는 조건문을 사용할 필요는 없음.
-    if (GetBlockCurrentPage(baseDie, baseBlock) < lbnToPbnNextOffset[block])
-        SetBlockCurrentPageCount(baseDie, baseBlock, lbnToPbnNextOffset[block]);
-
-    // print for degug
-    xil_printf("VSA write new : LSA %d -> VSA %d (logical block %d, slot %d) virtual Block %d\r\n",
-               logicalSliceAddr, vSlice, block, lbnToPbnNextOffset[block] - 1, baseVsa);
+    unsigned int vBaseDie = Vsa2VdieTranslation(vBlockBase);
+    unsigned int vBaseBlock = Vsa2VblockTranslation(vBlockBase);
+    if (GetBlockCurrentPage(vBaseDie, vBaseBlock) < lbnToPbnNextOffset[block])
+        SetBlockCurrentPageCount(vBaseDie, vBaseBlock, lbnToPbnNextOffset[block]);
 
     // ** 만약 블럭이 가득찼다면 매핑정보를 초기화하여 다른 block에 쓸수 있게 함
     // ** real-block level이라면, offset별로 매핑이 되므로 이럴일이 없고, read-modify-write 등을 사용하므로
     // ** 이와 다른 로직이 필요하지만, 우리는 sequential increase 방식이므로 이 로직을 사용함.
     if (lbnToPbnNextOffset[block] == SLICES_PER_BLOCK) {
-        UnlockBlockFromBlkMapping(baseDie, baseBlock);
+        UnlockBlockFromBlkMapping(vBaseDie, vBaseBlock);
         lbnToPbnMap[block] = VSA_NONE;
         lbnToPbnNextOffset[block] = 0;
         // 잠금 해제 및 매핑정보 초기화
     }
 
-    return vSlice;
+    return vBlockBase;
 }
 
 unsigned int FindFreeVirtualBlock() {
