@@ -632,6 +632,11 @@ unsigned int AddrTransWrite(unsigned int logicalSliceAddr) {
     unsigned int lbn = AddrToBlock(logicalSliceAddr);
     if (lbnToPbnMap[lbn] == VSA_NONE)               // if there is no virtual block mapped to the given logical block number
         lbnToPbnMap[lbn] = FindFreeVirtualBlock();  // get a free virtual block and map it to the given logical block number
+    //for Mapping Table Summary
+    InvalidateOldVsa(lbn);
+    logicalSliceMapPtr->logicalSlice[lbn].virtualSliceAddr = lbnToPbnMap[lbn];
+    virtualSliceMapPtr->virtualSlice[lbnToPbnMap[lbn]].logicalSliceAddr = logicalSliceAddr;
+    //for Mapping Table Summary
     return GetCurrentVirtualSliceOfVirtualBlock(lbn);
 }
 
