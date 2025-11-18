@@ -602,13 +602,6 @@ void InitBlockDieMap() {
 }
 
 // mjKim Code Start
-unsigned int AddrTransRead(unsigned int logicalSliceAddr) {  // lsa -> lbn -> pba (physical block address)
-    unsigned int lbn = AddrToBlock(logicalSliceAddr);
-    if (logicalSliceAddr < SLICES_PER_SSD)
-        return (lbnToPbnMap[lbn] != VSA_NONE) ? lbnToPbnMap[lbn] : VSA_FAIL;
-    else
-        assert(!"[WARNING] Logical address is larger than maximum logical address served by SSD [WARNING]");
-}
 
 static inline unsigned int GetCurrentVirtualSliceOfVirtualBlock(unsigned int lbn) {  // return a current virtual slice address of a virtual block mapped to the given logical block number
     unsigned int baseVsa = lbnToPbnMap[lbn];
@@ -624,12 +617,21 @@ static inline unsigned int GetCurrentVirtualSliceOfVirtualBlock(unsigned int lbn
     return vsa;
 }
 
+
+unsigned int AddrTransRead(unsigned int logicalSliceAddr) {  // lsa -> lbn -> pba (physical block address)
+    unsigned int lbn = AddrToBlock(logicalSliceAddr);
+    if (logicalSliceAddr < SLICES_PER_SSD)
+        return (lbnToPbnMap[lbn] != VSA_NONE) ? lbnToPbnMap[lbn] : VSA_FAIL;
+    else
+        assert(!"[WARNING] Logical address is larger than maximum logical address served by SSD [WARNING]");
+}
+
 unsigned int AddrTransWrite(unsigned int logicalSliceAddr) {
     if (logicalSliceAddr >= SLICES_PER_SSD)
         assert(!"[WARNING] Logical address is larger than maximum logical address served by SSD [WARNING]");
     unsigned int lbn = AddrToBlock(logicalSliceAddr);
-    if (lbnToPbnMap[lbn] == VSA_NONE)               // 해당 LBN에 아직 블록이 안 붙어 있으면
-        lbnToPbnMap[lbn] = FindFreeVirtualBlock();  // 새 virtual block 하나 가져와서 붙임
+    if (lbnToPbnMap[lbn] == VSA_NONE)               // if there is no virtual block mapped to the given logical block number
+        lbnToPbnMap[lbn] = FindFreeVirtualBlock();  // get a free virtual block and map it to the given logical block number
     return GetCurrentVirtualSliceOfVirtualBlock(lbn);
 }
 
