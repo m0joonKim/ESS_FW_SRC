@@ -635,7 +635,7 @@ unsigned int AddrTransWrite(unsigned int logicalSliceAddr) {
     //for Mapping Table Summary
     InvalidateOldVsa(lbn);
     logicalSliceMapPtr->logicalSlice[lbn].virtualSliceAddr = lbnToPbnMap[lbn];
-    virtualSliceMapPtr->virtualSlice[lbnToPbnMap[lbn]].logicalSliceAddr = logicalSliceAddr;
+    virtualSliceMapPtr->virtualSlice[lbnToPbnMap[lbn]].logicalSliceAddr = lbn;
     //for Mapping Table Summary
     return GetCurrentVirtualSliceOfVirtualBlock(lbn);
 }
