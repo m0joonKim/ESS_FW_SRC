@@ -87,11 +87,16 @@
 #define IO_NVM_COMPARE										0x05
 #define IO_NVM_DATASET_MANAGEMENT							0x09
 #define IO_NVM_HELLO										0x58
+#define IO_NVM_KV_PUT										0xA0
+#define IO_NVM_KV_GET										0xA1
+
 /*Status Code Type */
 #define SCT_GENERIC_COMMAND_STATUS							0
 #define SCT_COMMAND_SPECIFIC_STATUS							1
 #define SCT_MEDIA_AND_DATA_INTEGRITY_ERRORS					2
 #define SCT_VENDOR_SPECIFIC									7
+
+#define SC_ENOSUCHKEY										0x7C1
 
 /*Status Code - Generic Command Status Values */
 #define SC_SUCCESSFUL_COMPLETION							0x00

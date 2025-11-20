@@ -43,141 +43,193 @@
 // Revision History:
 //
 // * v1.0.1
-//   - header file for buffer is changed from "ia_lru_buffer.h" to "lru_buffer.h"
+//   - header file for buffer is changed from "ia_lru_buffer.h" to
+//   "lru_buffer.h"
 //
 // * v1.0.0
 //   - First draft
 //////////////////////////////////////////////////////////////////////////////////
 
-
-#include "xil_printf.h"
 #include "debug.h"
 #include "io_access.h"
+#include "xil_printf.h"
 
-#include "nvme.h"
 #include "host_lld.h"
+#include "nvme.h"
 #include "nvme_io_cmd.h"
 
+#include "../address_translation.h"
 #include "../ftl_config.h"
 #include "../request_transform.h"
 
-void handle_nvme_io_read(unsigned int cmdSlotTag, NVME_IO_COMMAND *nvmeIOCmd)
-{
-	IO_READ_COMMAND_DW12 readInfo12;
-	//IO_READ_COMMAND_DW13 readInfo13;
-	//IO_READ_COMMAND_DW15 readInfo15;
-	unsigned int startLba[2];
-	unsigned int nlb;
-	unsigned int nsid = nvmeIOCmd->NSID;
-	
+void handle_nvme_io_read(unsigned int cmdSlotTag, NVME_IO_COMMAND *nvmeIOCmd) {
+  IO_READ_COMMAND_DW12 readInfo12;
+  // IO_READ_COMMAND_DW13 readInfo13;
+  // IO_READ_COMMAND_DW15 readInfo15;
+  unsigned int startLba[2];
+  unsigned int nlb;
+  unsigned int nsid = nvmeIOCmd->NSID;
 
-	readInfo12.dword = nvmeIOCmd->dword[12];
-	//readInfo13.dword = nvmeIOCmd->dword[13];
-	//readInfo15.dword = nvmeIOCmd->dword[15];
+  readInfo12.dword = nvmeIOCmd->dword[12];
+  // readInfo13.dword = nvmeIOCmd->dword[13];
+  // readInfo15.dword = nvmeIOCmd->dword[15];
 
-	startLba[0] = nvmeIOCmd->dword[10];
-	startLba[1] = nvmeIOCmd->dword[11];
-	nlb = readInfo12.NLB;
+  startLba[0] = nvmeIOCmd->dword[10];
+  startLba[1] = nvmeIOCmd->dword[11];
+  nlb = readInfo12.NLB;
 
-	ASSERT(startLba[0] < storageCapacity_L / USER_CHANNELS && (startLba[1] < STORAGE_CAPACITY_H || startLba[1] == 0));
-	//ASSERT(nlb < MAX_NUM_OF_NLB);
-	ASSERT((nvmeIOCmd->PRP1[0] & 0x3) == 0 && (nvmeIOCmd->PRP2[0] & 0x3) == 0); //error
-	ASSERT(nvmeIOCmd->PRP1[1] < 0x10000 && nvmeIOCmd->PRP2[1] < 0x10000);
+  ASSERT(startLba[0] < storageCapacity_L / USER_CHANNELS &&
+         (startLba[1] < STORAGE_CAPACITY_H || startLba[1] == 0));
+  // ASSERT(nlb < MAX_NUM_OF_NLB);
+  ASSERT((nvmeIOCmd->PRP1[0] & 0x3) == 0 &&
+         (nvmeIOCmd->PRP2[0] & 0x3) == 0); // error
+  ASSERT(nvmeIOCmd->PRP1[1] < 0x10000 && nvmeIOCmd->PRP2[1] < 0x10000);
 
-	ReqTransNvmeToSlice(cmdSlotTag, startLba[0] + (storageCapacity_L / USER_CHANNELS) * (nsid - 1), nlb, IO_NVM_READ);
+  ReqTransNvmeToSlice(cmdSlotTag,
+                      startLba[0] +
+                          (storageCapacity_L / USER_CHANNELS) * (nsid - 1),
+                      nlb, IO_NVM_READ);
 }
 
+void handle_nvme_io_write(unsigned int cmdSlotTag, NVME_IO_COMMAND *nvmeIOCmd) {
+  IO_READ_COMMAND_DW12 writeInfo12;
+  // IO_READ_COMMAND_DW13 writeInfo13;
+  // IO_READ_COMMAND_DW15 writeInfo15;
+  unsigned int startLba[2];
+  unsigned int nlb;
+  unsigned int nsid = nvmeIOCmd->NSID;
 
-void handle_nvme_io_write(unsigned int cmdSlotTag, NVME_IO_COMMAND *nvmeIOCmd)
-{
-	IO_READ_COMMAND_DW12 writeInfo12;
-	//IO_READ_COMMAND_DW13 writeInfo13;
-	//IO_READ_COMMAND_DW15 writeInfo15;
-	unsigned int startLba[2];
-	unsigned int nlb;
-	unsigned int nsid = nvmeIOCmd->NSID;
+  writeInfo12.dword = nvmeIOCmd->dword[12];
+  // writeInfo13.dword = nvmeIOCmd->dword[13];
+  // writeInfo15.dword = nvmeIOCmd->dword[15];
 
-	writeInfo12.dword = nvmeIOCmd->dword[12];
-	//writeInfo13.dword = nvmeIOCmd->dword[13];
-	//writeInfo15.dword = nvmeIOCmd->dword[15];
+  // if(writeInfo12.FUA == 1)
+  //	xil_printf("write FUA\r\n");
 
-	//if(writeInfo12.FUA == 1)
-	//	xil_printf("write FUA\r\n");
+  startLba[0] = nvmeIOCmd->dword[10];
+  startLba[1] = nvmeIOCmd->dword[11];
+  nlb = writeInfo12.NLB;
 
-	startLba[0] = nvmeIOCmd->dword[10];
-	startLba[1] = nvmeIOCmd->dword[11];
-	nlb = writeInfo12.NLB;
+  ASSERT(startLba[0] < storageCapacity_L / USER_CHANNELS &&
+         (startLba[1] < STORAGE_CAPACITY_H || startLba[1] == 0));
+  // ASSERT(nlb < MAX_NUM_OF_NLB);
+  ASSERT((nvmeIOCmd->PRP1[0] & 0xF) == 0 && (nvmeIOCmd->PRP2[0] & 0xF) == 0);
+  ASSERT(nvmeIOCmd->PRP1[1] < 0x10000 && nvmeIOCmd->PRP2[1] < 0x10000);
 
-	ASSERT(startLba[0] < storageCapacity_L / USER_CHANNELS && (startLba[1] < STORAGE_CAPACITY_H || startLba[1] == 0));
-	//ASSERT(nlb < MAX_NUM_OF_NLB);
-	ASSERT((nvmeIOCmd->PRP1[0] & 0xF) == 0 && (nvmeIOCmd->PRP2[0] & 0xF) == 0);
-	ASSERT(nvmeIOCmd->PRP1[1] < 0x10000 && nvmeIOCmd->PRP2[1] < 0x10000);
-
-	ReqTransNvmeToSlice(cmdSlotTag, startLba[0] + (storageCapacity_L / USER_CHANNELS) * (nsid - 1), nlb, IO_NVM_WRITE);
-}
-void handle_nvme_io_hello(unsigned int cmdSlotTag, NVME_IO_COMMAND *nvmeIOCmd)
-{
-	NVME_COMPLETION nvmeCPL;
-	nvmeCPL.dword[0] = 0;
-	nvmeCPL.specific = 0x20201558;
-	xil_printf("Name: Myounjoon Kim\r\n");
-	xil_printf("Student ID: 20201558\r\n");
-	xil_printf("Affiliaion: Sogang University Computer Science and Enginerring\r\n");
-	xil_printf("Interests: Embedded Systems and Operating System\r\n");
-	xil_printf("Hobbies: Soccer, Movies\r\n");
-	set_auto_nvme_cpl(cmdSlotTag, nvmeCPL.specific, nvmeCPL.statusFieldWord);
-
-}
-void handle_nvme_io_cmd(NVME_COMMAND *nvmeCmd)
-{
-	NVME_IO_COMMAND *nvmeIOCmd;
-	NVME_COMPLETION nvmeCPL;
-	unsigned int opc;
-	nvmeIOCmd = (NVME_IO_COMMAND*)nvmeCmd->cmdDword;
-	/*		xil_printf("OPC = 0x%X\r\n", nvmeIOCmd->OPC);
-			xil_printf("PRP1[63:32] = 0x%X, PRP1[31:0] = 0x%X\r\n", nvmeIOCmd->PRP1[1], nvmeIOCmd->PRP1[0]);
-			xil_printf("PRP2[63:32] = 0x%X, PRP2[31:0] = 0x%X\r\n", nvmeIOCmd->PRP2[1], nvmeIOCmd->PRP2[0]);
-			xil_printf("dword10 = 0x%X\r\n", nvmeIOCmd->dword10);
-			xil_printf("dword11 = 0x%X\r\n", nvmeIOCmd->dword11);
-			xil_printf("dword12 = 0x%X\r\n", nvmeIOCmd->dword12);*/
-
-
-	opc = (unsigned int)nvmeIOCmd->OPC;
-
-	switch(opc)
-	{
-		case IO_NVM_FLUSH:
-		{
-		//	xil_printf("IO Flush Command\r\n");
-			nvmeCPL.dword[0] = 0;
-			nvmeCPL.specific = 0x0;
-			set_auto_nvme_cpl(nvmeCmd->cmdSlotTag, nvmeCPL.specific, nvmeCPL.statusFieldWord);
-			break;
-		}
-		case IO_NVM_WRITE:
-		{
-//			xil_printf("IO Write Command\r\n");
-			handle_nvme_io_write(nvmeCmd->cmdSlotTag, nvmeIOCmd);
-			break;
-		}
-		case IO_NVM_READ:
-		{
-//			xil_printf("IO Read Command\r\n");
-			handle_nvme_io_read(nvmeCmd->cmdSlotTag, nvmeIOCmd);
-			break;
-		}
-		case IO_NVM_HELLO:
-		{
-			xil_printf("Custom Hello Command\r\n");
-			handle_nvme_io_hello(nvmeCmd->cmdSlotTag, nvmeIOCmd);
-			break;
-		}
-		default:
-		{
-			xil_printf("Not Support IO Command OPC: %X\r\n", opc);
-			ASSERT(0);
-			break;
-		}
-	}
+  ReqTransNvmeToSlice(cmdSlotTag,
+                      startLba[0] +
+                          (storageCapacity_L / USER_CHANNELS) * (nsid - 1),
+                      nlb, IO_NVM_WRITE);
 }
 
+void handle_nvme_kv_put(unsigned int cmdSlotTag, NVME_IO_COMMAND *nvmeIOCmd) {
+  unsigned int startLba;
+  unsigned int nlb;
+  unsigned int nsid = nvmeIOCmd->NSID;
+  unsigned int key;
+
+  key = nvmeIOCmd->dword[10];
+  startLba = key * NVME_BLOCKS_PER_SLICE;
+  nlb = nvmeIOCmd->dword[12] & 0xFFFF;
+
+  ReqTransNvmeToSlice(cmdSlotTag, startLba, nlb, IO_NVM_WRITE);
+}
+
+void handle_nvme_kv_get(unsigned int cmdSlotTag, NVME_IO_COMMAND *nvmeIOCmd) {
+  unsigned int startLba;
+  unsigned int nlb;
+  unsigned int nsid = nvmeIOCmd->NSID;
+  unsigned int key;
+  unsigned int vsa;
+
+  key = nvmeIOCmd->dword[10];
+
+  vsa = AddrTransRead(key);
+
+  if (vsa == VSA_FAIL) {
+    NVME_COMPLETION nvmeCPL;
+    nvmeCPL.dword[0] = 0;
+    nvmeCPL.specific = 0;
+
+    nvmeCPL.statusField.SC = 0xC1;
+    nvmeCPL.statusField.SCT = 7;
+    nvmeCPL.statusField.reserved0 = 0;
+    nvmeCPL.statusField.reserved1 = 0;
+    nvmeCPL.statusField.MORE = 0;
+    nvmeCPL.statusField.DNR = 1;
+
+    set_auto_nvme_cpl(cmdSlotTag, nvmeCPL.specific, nvmeCPL.statusFieldWord);
+    return;
+  }
+
+  startLba = key * NVME_BLOCKS_PER_SLICE;
+  nlb = nvmeIOCmd->dword[12] & 0xFFFF;
+
+  ReqTransNvmeToSlice(cmdSlotTag, startLba, nlb, IO_NVM_KV_GET);
+}
+void handle_nvme_io_hello(unsigned int cmdSlotTag, NVME_IO_COMMAND *nvmeIOCmd) {
+  NVME_COMPLETION nvmeCPL;
+  nvmeCPL.dword[0] = 0;
+  nvmeCPL.specific = 0x20201558;
+  xil_printf("Name: Myounjoon Kim\r\n");
+  xil_printf("Student ID: 20201558\r\n");
+  xil_printf(
+      "Affiliaion: Sogang University Computer Science and Enginerring\r\n");
+  xil_printf("Interests: Embedded Systems and Operating System\r\n");
+  xil_printf("Hobbies: Soccer, Movies\r\n");
+  set_auto_nvme_cpl(cmdSlotTag, nvmeCPL.specific, nvmeCPL.statusFieldWord);
+}
+void handle_nvme_io_cmd(NVME_COMMAND *nvmeCmd) {
+  NVME_IO_COMMAND *nvmeIOCmd;
+  NVME_COMPLETION nvmeCPL;
+  unsigned int opc;
+  nvmeIOCmd = (NVME_IO_COMMAND *)nvmeCmd->cmdDword;
+  /*		xil_printf("OPC = 0x%X\r\n", nvmeIOCmd->OPC);
+                  xil_printf("PRP1[63:32] = 0x%X, PRP1[31:0] = 0x%X\r\n",
+     nvmeIOCmd->PRP1[1], nvmeIOCmd->PRP1[0]); xil_printf("PRP2[63:32] = 0x%X,
+     PRP2[31:0] = 0x%X\r\n", nvmeIOCmd->PRP2[1], nvmeIOCmd->PRP2[0]);
+                  xil_printf("dword10 = 0x%X\r\n", nvmeIOCmd->dword10);
+                  xil_printf("dword11 = 0x%X\r\n", nvmeIOCmd->dword11);
+                  xil_printf("dword12 = 0x%X\r\n", nvmeIOCmd->dword12);*/
+
+  opc = (unsigned int)nvmeIOCmd->OPC;
+
+  switch (opc) {
+  case IO_NVM_FLUSH: {
+    //	xil_printf("IO Flush Command\r\n");
+    nvmeCPL.dword[0] = 0;
+    nvmeCPL.specific = 0x0;
+    set_auto_nvme_cpl(nvmeCmd->cmdSlotTag, nvmeCPL.specific,
+                      nvmeCPL.statusFieldWord);
+    break;
+  }
+  case IO_NVM_WRITE: {
+    //			xil_printf("IO Write Command\r\n");
+    handle_nvme_io_write(nvmeCmd->cmdSlotTag, nvmeIOCmd);
+    break;
+  }
+  case IO_NVM_READ: {
+    //			xil_printf("IO Read Command\r\n");
+    handle_nvme_io_read(nvmeCmd->cmdSlotTag, nvmeIOCmd);
+    break;
+  }
+  case IO_NVM_HELLO: {
+    xil_printf("Custom Hello Command\r\n");
+    handle_nvme_io_hello(nvmeCmd->cmdSlotTag, nvmeIOCmd);
+    break;
+  }
+  case IO_NVM_KV_PUT: {
+    handle_nvme_kv_put(nvmeCmd->cmdSlotTag, nvmeIOCmd);
+    break;
+  }
+  case IO_NVM_KV_GET: {
+    handle_nvme_kv_get(nvmeCmd->cmdSlotTag, nvmeIOCmd);
+    break;
+  }
+  default: {
+    xil_printf("Not Support IO Command OPC: %X\r\n", opc);
+    ASSERT(0);
+    break;
+  }
+  }
+}
