@@ -12,7 +12,7 @@ This repository contains the firmware source code for the **Embedded Storage Sys
 - **Topic**: FTL Mapping (Page-level)
 - **Description**: Implementation of **Page-level Mapping** FTL.
 
-### `prj2_block_level` (Project 2 - mjkim immpl)
+### `prj2_block_level` (Project 2 - mjkim impl)
 - **Topic**: FTL Mapping (Block-level)
 - **Description**: Implementation of **Block-level Mapping** FTL.
 
